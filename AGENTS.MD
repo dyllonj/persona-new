@@ -31,6 +31,24 @@ Use this priority order when facts conflict:
 
 Every citation, dataset license, model ID, API parameter, and benchmark claim used in implementation docs must be verified from a primary source before it is committed.
 
+## Commit Cadence
+
+Make small, intentional commits after every few major file changes. A good
+checkpoint is one coherent implementation slice, such as schemas plus their
+tests, CLI behavior plus tests, metric plumbing plus tests, or docs plus
+verification notes.
+
+Commit only after the relevant local checks pass. At minimum, run the affected
+unit tests; for sprint-level work, run the sprint's full verification command
+set before committing. Do not mix unrelated changes in the same commit, and do
+not stage generated autoresearch logs or cache files.
+
+Use concise commit messages that name the completed slice, for example:
+
+- `Add Sprint 2 behavior metric plumbing`
+- `Tighten result-row metric schemas`
+- `Add Sprint 3 mock run command`
+
 ## Verified Corrections To `guide.MD`
 
 Do not copy these guide claims forward without correction.

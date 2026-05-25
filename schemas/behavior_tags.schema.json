@@ -1,24 +1,120 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.local/behavior_tags.schema.json",
-  "title": "Sprint 0 Behavior Tags",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["stance", "primary_action", "secondary_modifiers"],
-  "properties": {
-    "stance": {
-      "type": "string",
-      "minLength": 1
+  "title": "Sprint 2 Behavior Tags",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "const": "not_run"
+        }
+      }
     },
-    "primary_action": {
-      "type": "string",
-      "minLength": 1
-    },
-    "secondary_modifiers": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason_code",
+        "parser",
+        "labels",
+        "parser_fallback",
+        "json_repair_used",
+        "human_review_required",
+        "llm_tagger_status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "ambiguous", "error"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        },
+        "parser": {
+          "type": "string",
+          "enum": ["rule_first", "llm_tagger", "manual", "none"]
+        },
+        "labels": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/behavior_labels"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parser_fallback": {
+          "type": "boolean"
+        },
+        "json_repair_used": {
+          "type": "boolean"
+        },
+        "human_review_required": {
+          "type": "boolean"
+        },
+        "llm_tagger_status": {
+          "type": "string",
+          "enum": ["disabled", "disabled_no_api_calls", "not_needed", "not_run"]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "behavior_labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stance", "primary_action", "secondary_modifiers"],
+      "properties": {
+        "stance": {
+          "type": "string",
+          "enum": [
+            "support",
+            "oppose",
+            "neutral",
+            "conditional",
+            "uncertain",
+            "neutral_to_skeptical",
+            "cautious",
+            "safety_first",
+            "helpful",
+            "skeptical",
+            "supportive",
+            "tradeoff_driven"
+          ]
+        },
+        "primary_action": {
+          "type": "string",
+          "enum": [
+            "recommend",
+            "request_evidence",
+            "refuse",
+            "ask_followup",
+            "escalate",
+            "summarize_risk",
+            "state_limitations",
+            "pause_operations",
+            "request_order_info",
+            "request_logs",
+            "ask_budget",
+            "state_dependencies",
+            "explain_error",
+            "request_baseline",
+            "compare_buy_build"
+          ]
+        },
+        "secondary_modifiers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     }
   }

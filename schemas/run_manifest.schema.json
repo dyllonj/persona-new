@@ -31,5 +31,114 @@
     "extractor_version",
     "embedding_model_revision",
     "nli_or_judge_model_revision"
-  ]
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "code_commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dirty_worktree": {
+      "type": "boolean"
+    },
+    "persona_jsonl_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "prompt_template_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_template_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "chat_template_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tokenizer_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tokenizer_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_base": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_tuned": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_base_revision_or_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_tuned_revision_or_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adapter": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_or_endpoint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "serving_stack": {
+      "type": "string",
+      "minLength": 1
+    },
+    "serving_stack_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scoring_capability": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gpu_cuda_driver": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decoding_params": {
+      "type": "object"
+    },
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer"
+      }
+    },
+    "stop_sequences": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extractor_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "embedding_model_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nli_or_judge_model_revision": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
 }

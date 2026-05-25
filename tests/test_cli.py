@@ -39,6 +39,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout, "planned_generation_calls=120\n")
 
+    def test_plan_rejects_partial_model_pair(self):
+        completed = self.run_cli(
+            "plan",
+            "--persona-path",
+            str(SAMPLE_PATH),
+            "--model-base",
+            "base",
+            "--seeds",
+            "1",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--model-base and --model-tuned", completed.stderr)
+
     def test_plan_with_explicit_counts_prints_correct_count(self):
         completed = self.run_cli(
             "plan",

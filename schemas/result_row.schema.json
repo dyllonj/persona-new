@@ -14,6 +14,8 @@
     "system_prompt",
     "prompt_hash",
     "system_prompt_hash",
+    "prompt_template_version",
+    "prompt_template_hash",
     "model_pair",
     "base",
     "tuned",
@@ -22,11 +24,113 @@
     "flags"
   ],
   "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "persona_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "variant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "variant_type": {
+      "type": "string",
+      "enum": [
+        "canonical",
+        "paraphrase",
+        "negation_preserving",
+        "distractor",
+        "instruction_prefix",
+        "temperature_robust"
+      ]
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "prompt_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "system_prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "system_prompt_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "prompt_template_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_template_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "model_pair": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["base", "tuned"],
+      "properties": {
+        "base": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tuned": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "base": {
       "$ref": "#/$defs/model_output"
     },
     "tuned": {
       "$ref": "#/$defs/model_output"
+    },
+    "behavior_tags": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_run", "ok", "ambiguous", "error"]
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "token_kl",
+        "persona_adherence",
+        "behavioral_consistency_f1"
+      ],
+      "properties": {
+        "token_kl": {
+          "$ref": "#/$defs/token_kl_status"
+        },
+        "persona_adherence": {
+          "$ref": "#/$defs/persona_adherence_status"
+        },
+        "behavioral_consistency_f1": {
+          "$ref": "#/$defs/behavioral_consistency_f1_status"
+        }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "$defs": {
@@ -34,6 +138,8 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
+        "status",
+        "reason_code",
         "response_text",
         "raw_request",
         "stop_reason",
@@ -41,7 +147,440 @@
         "usage",
         "latency_s",
         "raw_response"
-      ]
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "error"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        },
+        "response_text": {
+          "type": "string"
+        },
+        "raw_request": {
+          "$ref": "#/$defs/generation_request"
+        },
+        "stop_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "truncation_flag": {
+          "type": "boolean"
+        },
+        "usage": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens"
+          ],
+          "properties": {
+            "prompt_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completion_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_tokens": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "latency_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "raw_response": {
+          "type": "object"
+        }
+      }
+    },
+    "generation_request": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "run_id",
+        "persona_id",
+        "variant_id",
+        "variant_type",
+        "model_alias",
+        "model_id",
+        "model_revision_or_hash",
+        "tokenizer_name",
+        "tokenizer_hash",
+        "chat_template_hash",
+        "prompt_template_version",
+        "prompt_template_hash",
+        "prompt_text",
+        "system_prompt",
+        "seed",
+        "decoding_params",
+        "stop_sequences",
+        "prompt_hash",
+        "system_prompt_hash",
+        "adapter",
+        "provider_or_endpoint",
+        "serving_stack",
+        "serving_stack_version",
+        "scoring_capability"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "persona_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_alias": {
+          "type": "string",
+          "enum": ["base", "tuned"]
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_revision_or_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tokenizer_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tokenizer_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chat_template_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_template_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_template_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "prompt_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "system_prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "decoding_params": {
+          "type": "object"
+        },
+        "stop_sequences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prompt_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "system_prompt_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "adapter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_or_endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "serving_stack": {
+          "type": "string",
+          "minLength": 1
+        },
+        "serving_stack_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scoring_capability": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "token_kl_status": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "value",
+        "reason_code",
+        "scoring_path",
+        "fixed_continuation_id",
+        "fixed_continuation_hash",
+        "tokenizer_hash_match",
+        "vocabulary_match",
+        "chat_template_hash_match",
+        "k",
+        "endpoint_cap",
+        "diagnostic_only"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "not_applicable", "diagnostic_only", "error"]
+        },
+        "value": {
+          "type": ["number", "null"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        },
+        "scoring_path": {
+          "type": "string",
+          "enum": [
+            "local_forward",
+            "vllm_prompt_logprobs",
+            "one_token_loop",
+            "hosted_top_logprobs",
+            "none"
+          ]
+        },
+        "fixed_continuation_id": {
+          "type": ["string", "null"]
+        },
+        "fixed_continuation_hash": {
+          "type": ["string", "null"]
+        },
+        "tokenizer_hash_match": {
+          "type": ["boolean", "null"]
+        },
+        "vocabulary_match": {
+          "type": ["boolean", "null"]
+        },
+        "chat_template_hash_match": {
+          "type": ["boolean", "null"]
+        },
+        "k": {
+          "type": ["integer", "null"]
+        },
+        "endpoint_cap": {
+          "type": ["integer", "null"]
+        },
+        "diagnostic_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "persona_adherence_status": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "mock_only"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": [
+              "reason_code",
+              "value",
+              "mock_score",
+              "semantic_similarity",
+              "threshold",
+              "pass_at_threshold",
+              "fact_contradiction_rate",
+              "persona_serialization_hash",
+              "calibration_id",
+              "calibration_hash",
+              "embedding_model_revision",
+              "nli_or_judge_model_revision",
+              "mock_only"
+            ],
+            "properties": {
+              "reason_code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "null"
+              },
+              "threshold": {
+                "type": "null"
+              },
+              "pass_at_threshold": {
+                "type": "null"
+              },
+              "mock_only": {
+                "const": true
+              },
+              "persona_serialization_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "embedding_model_revision": {
+                "type": "string",
+                "minLength": 1
+              },
+              "nli_or_judge_model_revision": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_run", "not_applicable", "mock_only", "error"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        },
+        "value": {
+          "type": ["number", "null"]
+        },
+        "mock_score": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "semantic_similarity": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "threshold": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "pass_at_threshold": {
+          "type": ["boolean", "null"]
+        },
+        "fact_contradiction_rate": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "persona_serialization_hash": {
+          "type": ["string", "null"]
+        },
+        "calibration_id": {
+          "type": ["string", "null"]
+        },
+        "calibration_hash": {
+          "type": ["string", "null"]
+        },
+        "embedding_model_revision": {
+          "type": ["string", "null"]
+        },
+        "nli_or_judge_model_revision": {
+          "type": ["string", "null"]
+        },
+        "mock_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "behavioral_consistency_f1_status": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": [
+              "reason_code",
+              "stance_exact",
+              "primary_action_exact",
+              "secondary_modifiers_precision",
+              "secondary_modifiers_recall",
+              "secondary_modifiers_f1",
+              "combined_score"
+            ],
+            "properties": {
+              "reason_code": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_run", "ok", "not_applicable", "error"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        },
+        "stance_exact": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "primary_action_exact": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "secondary_modifiers_precision": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "secondary_modifiers_recall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "secondary_modifiers_f1": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "combined_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
     }
   }
 }

@@ -1,4 +1,6 @@
 import copy
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,6 +42,18 @@ class SchemaTests(unittest.TestCase):
         row["source"]["retrieved_at"] = "2026-99-99"
         with self.assertRaises(PersonaValidationError):
             validate_persona_row(row)
+
+    def test_validate_personas_rejects_duplicate_persona_ids(self):
+        rows = [copy.deepcopy(self.rows[0]), copy.deepcopy(self.rows[1])]
+        rows[1]["persona_id"] = rows[0]["persona_id"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "duplicate_personas.jsonl"
+            path.write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(PersonaValidationError):
+                validate_personas(path)
 
     def test_schema_rejects_legacy_behavior_shape_without_canonical_fields(self):
         row = copy.deepcopy(self.rows[0])

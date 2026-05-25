@@ -41,6 +41,12 @@ class VariantTests(unittest.TestCase):
         with self.assertRaises(PersonaValidationError):
             validate_persona_row(row)
 
+    def test_rejects_duplicate_variant_ids(self):
+        row = copy.deepcopy(self.rows[0])
+        row["variants"][1]["variant_id"] = row["variants"][0]["variant_id"]
+        with self.assertRaises(PersonaValidationError):
+            validate_persona_row(row)
+
 
 if __name__ == "__main__":
     unittest.main()
