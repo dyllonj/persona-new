@@ -121,6 +121,24 @@ class DatasetPromotionTests(unittest.TestCase):
         self.assertIn("review_evidence_missing", report["rejection_counts"])
         self.assertIn("minimum_review_coverage_not_met", report["rejection_counts"])
 
+    def test_missing_review_manifest_reports_structured_blockers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate_path = root / "candidates.jsonl"
+            review_path = root / "missing.review.jsonl"
+            _write_jsonl(candidate_path, [self.valid_rows_200[0]])
+
+            report, _ = dataset_promotion.evaluate_promotion(
+                candidate_path=candidate_path,
+                review_path=review_path,
+                out_path=root / "personas.full.jsonl",
+                dry_run=True,
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("review_manifest_missing", report["rejection_counts"])
+        self.assertIn("review_evidence_missing", report["rejection_counts"])
+
     def test_low_confidence_rows_require_review(self):
         candidate = copy.deepcopy(self.valid_rows_200[0])
         candidate["low_confidence_flags"] = ["semantic_equivalence_manual_required"]

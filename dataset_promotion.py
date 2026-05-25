@@ -326,7 +326,14 @@ def evaluate_promotion(
     candidate_path = Path(candidate_path)
     review_path = Path(review_path)
     report["candidate_input_hash"] = hash_file_bytes(candidate_path)
-    report["review_manifest_hash"] = hash_file_bytes(review_path)
+    if review_path.exists():
+        report["review_manifest_hash"] = hash_file_bytes(review_path)
+    else:
+        _add_rejection(
+            report,
+            reason_code="review_manifest_missing",
+            detail=f"{review_path} does not exist.",
+        )
 
     persona_rows, low_confidence_by_id, invalid_rows = load_candidate_personas(candidate_path)
     report["candidate_row_count"] = len(load_jsonl(candidate_path))
@@ -349,7 +356,7 @@ def evaluate_promotion(
     _add_safety_rejections(report, persona_rows)
     _add_dedupe_rejections(report, persona_rows)
     _add_gold_label_rejections(report, persona_rows)
-    review_rows = _load_review_rows(review_path, report)
+    review_rows = _load_review_rows(review_path, report) if review_path.exists() else []
     review_manifest_invalid = any(row["reason_code"] == "review_manifest_invalid" for row in report["rejections"])
     if review_rows or not review_manifest_invalid:
         _add_review_rejections(report, persona_rows, review_rows, low_confidence_by_id)
