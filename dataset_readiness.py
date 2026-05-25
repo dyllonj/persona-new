@@ -23,6 +23,7 @@ from persona_eval import (
     PERSONA_SCHEMA_PATH,
     REPO_ROOT,
     PersonaValidationError,
+    hash_file_bytes,
     load_jsonl,
     validate_behavior_labels,
     validate_personas,
@@ -33,7 +34,9 @@ from persona_eval import (
 READINESS_VERSION = "sprint5"
 REVIEW_MANIFEST_SCHEMA_PATH = REPO_ROOT / "schemas" / "review_manifest.schema.json"
 DEFAULT_SAMPLE_PATH = REPO_ROOT / "data" / "personas.sample.jsonl"
+DEFAULT_FULL_DATASET_PATH = REPO_ROOT / "data" / "personas.full.jsonl"
 DEFAULT_REVIEW_MANIFEST_PATH = REPO_ROOT / "reviews" / "personas.sample.review.jsonl"
+DEFAULT_PROMOTION_MANIFEST_PATH = REPO_ROOT / "reports" / "dataset_promotion_manifest.json"
 ALLOWED_DATA_FILENAMES = {"personas.sample.jsonl"}
 FULL_DATASET_PERSONA_COUNT = 200
 PASSING_REVIEW_STATUSES = {"approved", "sample_reviewed"}
@@ -166,6 +169,16 @@ def status_payload(status: str, reason_code: str | None, evidence: str | None = 
     }
     payload.update(extra)
     return payload
+
+
+def load_json_object(path: str | Path) -> dict[str, Any]:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PersonaValidationError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise PersonaValidationError(f"{path} must contain a JSON object")
+    return value
 
 
 def finding(
@@ -440,16 +453,153 @@ def dedupe_report(rows: list[dict[str, Any]], *, near_threshold: float = 0.92) -
     }
 
 
-def candidate_location_report(root: str | Path = REPO_ROOT) -> dict[str, Any]:
+def promoted_dataset_manifest_report(
+    *,
+    persona_path: str | Path = DEFAULT_FULL_DATASET_PATH,
+    promotion_manifest_path: str | Path = DEFAULT_PROMOTION_MANIFEST_PATH,
+) -> dict[str, Any]:
+    manifest_path = Path(promotion_manifest_path)
+    dataset_path = Path(persona_path)
+    if not dataset_path.exists():
+        return status_payload(
+            "blocked",
+            "promoted_dataset_missing",
+            f"{dataset_path} does not exist.",
+        )
+    if not manifest_path.exists():
+        return status_payload(
+            "blocked",
+            "promotion_manifest_missing",
+            f"{manifest_path} does not exist.",
+        )
+    try:
+        manifest = load_json_object(manifest_path)
+    except PersonaValidationError as exc:
+        return status_payload("blocked", "promotion_manifest_invalid", str(exc))
+
+    dataset_hash = hash_file_bytes(dataset_path)
+    required = {
+        "status": "promoted",
+        "manifest_type": "dataset_promotion",
+        "persona_count": FULL_DATASET_PERSONA_COUNT,
+        "target_count": FULL_DATASET_PERSONA_COUNT,
+        "valid_candidate_count": FULL_DATASET_PERSONA_COUNT,
+        "approved_candidate_count": FULL_DATASET_PERSONA_COUNT,
+    }
+    mismatches = [
+        f"{field}={manifest.get(field)!r}, expected {expected!r}"
+        for field, expected in required.items()
+        if manifest.get(field) != expected
+    ]
+    for field in ("dataset_hash", "promoted_output_hash"):
+        if manifest.get(field) != dataset_hash:
+            mismatches.append(f"{field} does not match {dataset_path}")
+    if manifest.get("rejection_counts") not in ({}, None):
+        mismatches.append("rejection_counts is not empty")
+    if mismatches:
+        return status_payload(
+            "blocked",
+            "promotion_manifest_does_not_match_dataset",
+            "; ".join(mismatches),
+            dataset_hash=dataset_hash,
+            manifest_path=str(manifest_path),
+        )
+    return status_payload(
+        "pass",
+        None,
+        f"{manifest_path} records a promoted 200-row dataset matching {dataset_path}.",
+        dataset_hash=dataset_hash,
+        manifest_path=str(manifest_path),
+        manifest=manifest,
+    )
+
+
+def promotion_dedupe_evidence_report(
+    *,
+    persona_path: str | Path = DEFAULT_FULL_DATASET_PATH,
+    promotion_manifest_path: str | Path = DEFAULT_PROMOTION_MANIFEST_PATH,
+) -> dict[str, Any]:
+    promoted = promoted_dataset_manifest_report(
+        persona_path=persona_path,
+        promotion_manifest_path=promotion_manifest_path,
+    )
+    if promoted["status"] != "pass":
+        return promoted
+    manifest = promoted["manifest"]
+    filter_summary = manifest.get("filter_summary", {})
+    if not isinstance(filter_summary, dict):
+        return status_payload("blocked", "promotion_filter_summary_missing", "Promotion manifest has no filter_summary object.")
+    exact_count = filter_summary.get("exact_duplicate_groups")
+    near_count = filter_summary.get("near_duplicate_pairs")
+    if exact_count != 0 or near_count != 0:
+        return status_payload(
+            "blocked",
+            "promotion_dedupe_findings_present",
+            f"Promotion manifest records exact_duplicate_groups={exact_count}, near_duplicate_pairs={near_count}.",
+            filter_summary=filter_summary,
+        )
+
+    candidate_manifest_path = manifest.get("candidate_manifest_path")
+    if not isinstance(candidate_manifest_path, str) or not candidate_manifest_path.strip():
+        return status_payload("blocked", "candidate_manifest_missing", "Promotion manifest does not name a candidate manifest.")
+    candidate_manifest = Path(candidate_manifest_path)
+    if not candidate_manifest.is_absolute():
+        candidate_manifest = REPO_ROOT / candidate_manifest
+    if not candidate_manifest.exists():
+        return status_payload("blocked", "candidate_manifest_missing", f"{candidate_manifest} does not exist.")
+    expected_candidate_hash = manifest.get("candidate_manifest_hash")
+    if expected_candidate_hash and hash_file_bytes(candidate_manifest) != expected_candidate_hash:
+        return status_payload("blocked", "candidate_manifest_hash_mismatch", f"{candidate_manifest} hash does not match promotion manifest.")
+    try:
+        candidate_payload = load_json_object(candidate_manifest)
+    except PersonaValidationError as exc:
+        return status_payload("blocked", "candidate_manifest_invalid", str(exc))
+    validation = candidate_payload.get("validation_summary", {})
+    checks = validation.get("checks", []) if isinstance(validation, dict) else []
+    if validation.get("status") != "pass" or "near_duplicate_diversity_scan" not in checks:
+        return status_payload(
+            "blocked",
+            "candidate_dedupe_diversity_evidence_missing",
+            "Candidate manifest must record a passing near_duplicate_diversity_scan.",
+            candidate_manifest_path=str(candidate_manifest),
+        )
+
+    return status_payload(
+        "pass",
+        None,
+        "Promotion manifest records zero exact/near duplicate findings and the selected-candidate manifest records a passing diversity scan.",
+        exact_duplicate_groups=0,
+        near_duplicate_pairs=0,
+        candidate_manifest_path=str(candidate_manifest),
+    )
+
+
+def candidate_location_report(
+    root: str | Path = REPO_ROOT,
+    *,
+    promotion_manifest_path: str | Path | None = None,
+) -> dict[str, Any]:
     root_path = Path(root)
     data_dir = root_path / "data"
+    allowed_filenames = set(ALLOWED_DATA_FILENAMES)
+    full_dataset_path = data_dir / "personas.full.jsonl"
+    if promotion_manifest_path is None:
+        promotion_manifest_path = root_path / "reports" / "dataset_promotion_manifest.json"
+    promoted_report = None
+    if full_dataset_path.exists():
+        promoted_report = promoted_dataset_manifest_report(
+            persona_path=full_dataset_path,
+            promotion_manifest_path=promotion_manifest_path,
+        )
+        if promoted_report["status"] == "pass":
+            allowed_filenames.add("personas.full.jsonl")
     unexpected: list[str] = []
     if data_dir.exists():
         for path in sorted(data_dir.rglob("*")):
             if not path.is_file():
                 continue
             rel = path.relative_to(data_dir).as_posix()
-            if rel not in ALLOWED_DATA_FILENAMES:
+            if rel not in allowed_filenames:
                 unexpected.append(rel)
     if unexpected:
         return {
@@ -457,12 +607,14 @@ def candidate_location_report(root: str | Path = REPO_ROOT) -> dict[str, Any]:
             "reason_code": "unexpected_candidate_or_full_files_under_data",
             "unexpected_files": unexpected,
             "evidence": "Only data/personas.sample.jsonl is allowed before the full-dataset gate passes.",
+            "promoted_dataset": promoted_report,
         }
     return {
         "status": "pass",
         "reason_code": None,
         "unexpected_files": [],
         "evidence": "No unvalidated candidate or full dataset files are under data/.",
+        "promoted_dataset": promoted_report,
     }
 
 
@@ -746,6 +898,7 @@ def full_dataset_readiness_report(
     root: str | Path = REPO_ROOT,
     persona_path: str | Path = DEFAULT_SAMPLE_PATH,
     review_manifest_path: str | Path | None = DEFAULT_REVIEW_MANIFEST_PATH,
+    promotion_manifest_path: str | Path | None = DEFAULT_PROMOTION_MANIFEST_PATH,
     machine_validator_evidence_by_persona: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root)
@@ -796,16 +949,40 @@ def full_dataset_readiness_report(
     )
 
     dedupe = dedupe_report(rows) if rows else {"status": "blocked", "reason_code": "no_rows"}
-    checks["dedupe_checks_exist"] = (
-        status_payload("pass", None, "Exact, near-duplicate, and embedding-cluster dedupe evidence is complete.", details=dedupe)
-        if dedupe["status"] == "pass"
-        else status_payload(
+    if dedupe.get("status") == "pass":
+        checks["dedupe_checks_exist"] = status_payload(
+            "pass",
+            None,
+            "Exact, near-duplicate, and embedding-cluster dedupe evidence is complete.",
+            details=dedupe,
+        )
+    elif dedupe.get("status") == "manual_required" and promotion_manifest_path is not None:
+        promotion_dedupe = promotion_dedupe_evidence_report(
+            persona_path=persona_path,
+            promotion_manifest_path=promotion_manifest_path,
+        )
+        checks["dedupe_checks_exist"] = (
+            status_payload(
+                "pass",
+                None,
+                promotion_dedupe.get("evidence"),
+                details={"deterministic_dedupe": dedupe, "promotion_dedupe": promotion_dedupe},
+            )
+            if promotion_dedupe["status"] == "pass"
+            else status_payload(
+                "blocked",
+                promotion_dedupe.get("reason_code"),
+                promotion_dedupe.get("evidence"),
+                details={"deterministic_dedupe": dedupe, "promotion_dedupe": promotion_dedupe},
+            )
+        )
+    else:
+        checks["dedupe_checks_exist"] = status_payload(
             "blocked",
             dedupe.get("reason_code"),
             "Exact/near duplicate validators exist, but embedding-cluster review remains manual-required.",
             details=dedupe,
         )
-    )
 
     review_report = review_manifest_report(rows, review_manifest_path=review_manifest_path) if rows else {
         "status": "blocked",
@@ -868,7 +1045,7 @@ def full_dataset_readiness_report(
         else status_payload("blocked", coverage.get("reason_code"), coverage.get("evidence"), details=coverage)
     )
 
-    candidate_report = candidate_location_report(root_path)
+    candidate_report = candidate_location_report(root_path, promotion_manifest_path=promotion_manifest_path)
     checks["unvalidated_candidates_outside_data"] = (
         status_payload("pass", None, candidate_report.get("evidence"), details=candidate_report)
         if candidate_report["status"] == "pass"
@@ -890,6 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run deterministic full-dataset readiness gates")
     parser.add_argument("--persona-path", default=str(DEFAULT_SAMPLE_PATH))
     parser.add_argument("--review-manifest", default=str(DEFAULT_REVIEW_MANIFEST_PATH))
+    parser.add_argument("--promotion-manifest", default=str(DEFAULT_PROMOTION_MANIFEST_PATH))
     parser.add_argument("--json", action="store_true", help="print the full readiness report as JSON")
     return parser
 
@@ -904,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
         report = full_dataset_readiness_report(
             persona_path=args.persona_path,
             review_manifest_path=review_path,
+            promotion_manifest_path=args.promotion_manifest,
         )
     except (OSError, json.JSONDecodeError, PersonaValidationError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

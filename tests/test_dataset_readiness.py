@@ -6,7 +6,7 @@ from pathlib import Path
 
 import aggregate
 import dataset_readiness
-from persona_eval import PersonaValidationError, load_jsonl
+from persona_eval import PersonaValidationError, hash_file_bytes, load_jsonl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +40,33 @@ def _review_for(persona_id, *, status="approved"):
 
 def _write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
+def _write_promotion_manifest(path, *, persona_path, candidate_manifest_path=None):
+    dataset_hash = hash_file_bytes(persona_path)
+    payload = {
+        "manifest_type": "dataset_promotion",
+        "status": "promoted",
+        "persona_count": 200,
+        "target_count": 200,
+        "valid_candidate_count": 200,
+        "approved_candidate_count": 200,
+        "dataset_hash": dataset_hash,
+        "promoted_output_hash": dataset_hash,
+        "rejection_counts": {},
+        "filter_summary": {
+            "exact_duplicate_groups": 0,
+            "near_duplicate_pairs": 0,
+            "candidate_schema_invalid": 0,
+            "gold_label_preview_mismatches": 0,
+            "pii_or_real_person_findings": 0,
+            "restricted_role_findings": 0,
+        },
+    }
+    if candidate_manifest_path is not None:
+        payload["candidate_manifest_path"] = str(candidate_manifest_path)
+        payload["candidate_manifest_hash"] = hash_file_bytes(candidate_manifest_path)
+    path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 class DatasetReadinessTests(unittest.TestCase):
@@ -185,6 +212,65 @@ class DatasetReadinessTests(unittest.TestCase):
         self.assertEqual(report["status"], "blocked")
         self.assertEqual(report["reason_code"], "unexpected_candidate_or_full_files_under_data")
         self.assertEqual(report["unexpected_files"], ["personas.full.jsonl"])
+
+    def test_candidate_location_allows_promoted_full_dataset_with_matching_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            reports = root / "reports"
+            data.mkdir()
+            reports.mkdir()
+            (data / "personas.sample.jsonl").write_text("", encoding="utf-8")
+            full_path = data / "personas.full.jsonl"
+            full_path.write_text("{}\n", encoding="utf-8")
+            _write_promotion_manifest(reports / "dataset_promotion_manifest.json", persona_path=full_path)
+
+            report = dataset_readiness.candidate_location_report(root)
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["unexpected_files"], [])
+        self.assertEqual(report["promoted_dataset"]["status"], "pass")
+
+    def test_promotion_manifest_supplies_dedupe_evidence_after_promotion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data"
+            candidates = root / "candidates"
+            reports = root / "reports"
+            data.mkdir()
+            candidates.mkdir()
+            reports.mkdir()
+            full_path = data / "personas.full.jsonl"
+            full_path.write_text("{}\n", encoding="utf-8")
+            candidate_manifest = candidates / "selected.manifest.json"
+            candidate_manifest.write_text(
+                json.dumps(
+                    {
+                        "validation_summary": {
+                            "status": "pass",
+                            "checks": ["candidate_schema", "near_duplicate_diversity_scan"],
+                        }
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            promotion_manifest = reports / "dataset_promotion_manifest.json"
+            _write_promotion_manifest(
+                promotion_manifest,
+                persona_path=full_path,
+                candidate_manifest_path=candidate_manifest,
+            )
+
+            report = dataset_readiness.promotion_dedupe_evidence_report(
+                persona_path=full_path,
+                promotion_manifest_path=promotion_manifest,
+            )
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["exact_duplicate_groups"], 0)
+        self.assertEqual(report["near_duplicate_pairs"], 0)
 
     def test_gold_label_preview_report_blocks_mismatches(self):
         row = self.row()
