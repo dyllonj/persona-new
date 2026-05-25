@@ -111,6 +111,30 @@ The report uses `persona_id` as the inference unit. Variants and seeds are
 averaged inside each persona before cross-persona confidence intervals, deltas,
 effect sizes, or p-values are computed.
 
+## Candidate Generation
+
+Sprint 6 candidate pools are deterministic local fixtures written outside
+`data/`. The default fixture command writes 300 schema-valid candidates plus a
+sidecar manifest with row count, candidate schema version, generator version,
+source inventory, and output hash:
+
+```bash
+python3 candidate_generation.py create-fixtures --out candidates/sample_candidates.jsonl
+python3 candidate_generation.py validate --candidate-path candidates/sample_candidates.jsonl
+```
+
+Expected validation output includes:
+
+```text
+valid_candidate_rows=300
+manifest_valid=true
+```
+
+The candidate validator rejects duplicate candidate IDs, duplicate persona IDs,
+missing provenance, missing variants, invalid variant counts, and any candidate
+path under `data/`. Generated candidate pools and manifests remain ignored by
+git; only `candidates/.gitignore` and `candidates/README.md` are tracked.
+
 ## Token-KL Rules
 
 Canonical Token-KL is aggregated only when `metrics.token_kl.status` is `ok`.
