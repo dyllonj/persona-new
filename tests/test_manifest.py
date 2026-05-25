@@ -120,6 +120,7 @@ class ManifestAndResultTests(unittest.TestCase):
             "timestamp_utc",
             "code_commit",
             "dirty_worktree",
+            "persona_path",
             "persona_jsonl_hash",
             "prompt_template_version",
             "prompt_template_hash",
@@ -142,6 +143,8 @@ class ManifestAndResultTests(unittest.TestCase):
             "extractor_version",
             "embedding_model_revision",
             "nli_or_judge_model_revision",
+            "review_manifest_path",
+            "review_manifest_hash",
             "promotion_manifest_path",
             "promotion_manifest_hash",
             "raw_request_response_logging_status",
@@ -151,7 +154,10 @@ class ManifestAndResultTests(unittest.TestCase):
         self.assertTrue(required.issubset(manifest))
         self.assertIs(manifest["dirty_worktree"], True)
         expected_hash = "sha256:" + hashlib.sha256(SAMPLE_PATH.read_bytes()).hexdigest()
+        self.assertEqual(manifest["persona_path"], str(SAMPLE_PATH))
         self.assertEqual(manifest["persona_jsonl_hash"], expected_hash)
+        self.assertIsNone(manifest["review_manifest_path"])
+        self.assertIsNone(manifest["review_manifest_hash"])
         self.assertIsNone(manifest["promotion_manifest_path"])
         self.assertIsNone(manifest["promotion_manifest_hash"])
         self.assertEqual(manifest["raw_request_response_logging_status"], "enabled")
@@ -169,10 +175,13 @@ class ManifestAndResultTests(unittest.TestCase):
             timestamp_utc="2026-05-25T00:00:00Z",
             code_commit="test-commit",
             dirty_worktree=True,
+            review_manifest_path=SAMPLE_PATH,
             promotion_manifest_path=SAMPLE_PATH,
         )
 
         expected_hash = "sha256:" + hashlib.sha256(SAMPLE_PATH.read_bytes()).hexdigest()
+        self.assertEqual(manifest["review_manifest_path"], str(SAMPLE_PATH))
+        self.assertEqual(manifest["review_manifest_hash"], expected_hash)
         self.assertEqual(manifest["promotion_manifest_path"], str(SAMPLE_PATH))
         self.assertEqual(manifest["promotion_manifest_hash"], expected_hash)
         validate_run_manifest(manifest)

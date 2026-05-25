@@ -125,6 +125,13 @@ class RunCliTests(unittest.TestCase):
             self.assertEqual(manifest["adapter"], "mock")
             self.assertEqual(manifest["provider_or_endpoint"], "local_mock")
             self.assertEqual(manifest["scoring_capability"], "none")
+            self.assertEqual(manifest["persona_path"], str(SAMPLE_PATH))
+            self.assertTrue(manifest["persona_jsonl_hash"].startswith("sha256:"))
+            self.assertEqual(
+                manifest["review_manifest_path"],
+                str(ROOT / "reviews" / "personas.sample.review.jsonl"),
+            )
+            self.assertTrue(manifest["review_manifest_hash"].startswith("sha256:"))
             self.assertEqual(manifest["seeds"], [1])
             self.assertEqual(manifest["harness_version"], "sprint3")
             self.assertEqual(manifest["metric_version"], "sprint2")
@@ -234,6 +241,11 @@ class RunCliTests(unittest.TestCase):
             self.assertEqual(manifest["tokenizer_hash"], "sha256:fixture-tokenizer")
             self.assertEqual(manifest["chat_template_hash"], "sha256:fixture-chat-template")
             self.assertEqual(manifest["gpu_cuda_driver"], "fixture-gpu-driver")
+            self.assertEqual(manifest["persona_path"], str(SAMPLE_PATH))
+            self.assertEqual(
+                manifest["review_manifest_path"],
+                str(ROOT / "reviews" / "personas.sample.review.jsonl"),
+            )
             self.assertEqual(manifest["promotion_manifest_path"], str(promotion_manifest))
             self.assertTrue(manifest["promotion_manifest_hash"].startswith("sha256:"))
             self.assertEqual(manifest["raw_request_response_logging_status"], "enabled")

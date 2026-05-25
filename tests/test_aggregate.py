@@ -228,7 +228,10 @@ class AggregateTests(unittest.TestCase):
         self.assertIn(stats["p_value"]["status"], {"ok", "not_applicable"})
 
     def test_readiness_gate_remains_blocked_when_full_dataset_validators_are_missing(self):
-        readiness = aggregate.full_dataset_readiness()
+        readiness = aggregate.full_dataset_readiness(
+            persona_path=SAMPLE_PATH,
+            review_manifest_path=ROOT / "reviews" / "personas.sample.review.jsonl",
+        )
 
         self.assertEqual(readiness["status"], "blocked")
         self.assertEqual(readiness["checks"]["pii_and_real_person_filters_exist"]["status"], "pass")
@@ -237,6 +240,15 @@ class AggregateTests(unittest.TestCase):
         self.assertIn("nli_contradiction_equivalence_checks_exist", readiness["blocking_checks"])
         self.assertIn("human_review_coverage_sufficient", readiness["blocking_checks"])
         self.assertEqual(readiness["checks"]["source_license_checks_pass"]["status"], "pass")
+
+    def test_report_readiness_is_bound_to_manifest_persona_hash(self):
+        bad_manifest = copy.deepcopy(self.manifest)
+        bad_manifest["persona_path"] = str(ROOT / "README.md")
+        manifest_path, results_path = self.write_temp_run(self.copy_rows()[:1])
+        manifest_path.write_text(json.dumps(bad_manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+        with self.assertRaises(PersonaValidationError):
+            aggregate.build_report(manifest_path=manifest_path, results_path=results_path)
 
     def test_report_contains_statistical_metadata_and_availability(self):
         report = aggregate.build_report(

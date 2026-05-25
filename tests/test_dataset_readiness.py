@@ -141,7 +141,10 @@ class DatasetReadinessTests(unittest.TestCase):
         self.assertEqual(report["reason_code"], "gold_label_preview_mismatches")
 
     def test_aggregate_readiness_uses_real_validator_outputs(self):
-        readiness = aggregate.full_dataset_readiness()
+        readiness = aggregate.full_dataset_readiness(
+            persona_path=SAMPLE_PATH,
+            review_manifest_path=REVIEW_PATH,
+        )
 
         self.assertEqual(readiness["status"], "blocked")
         self.assertEqual(readiness["checks"]["pii_and_real_person_filters_exist"]["status"], "pass")
@@ -167,6 +170,67 @@ class DatasetReadinessTests(unittest.TestCase):
         self.assertEqual(
             readiness["checks"]["human_review_coverage_sufficient"]["reason_code"],
             "full_dataset_review_scope_missing",
+        )
+
+    def test_manual_semantic_and_nli_gates_require_every_persona(self):
+        approved_review = {
+            "persona_id": "fixture_001",
+            "reviewer": "fixture_reviewer",
+            "review_status": "approved",
+            "reviewed_at": "2026-05-25T00:00:00Z",
+            "review_reason": "Complete manual fixture evidence for one row only.",
+            "low_confidence_flags": [],
+            "semantic_equivalence_status": {
+                "status": "manual_pass",
+                "reviewer_override": False,
+                "evidence": ["All variants preserve the canonical meaning for this row."],
+            },
+            "nli_equivalence_status": {
+                "status": "manual_pass",
+                "reviewer_override": False,
+                "evidence": ["NLI-equivalence review passed for this row."],
+            },
+            "contradiction_status": {
+                "status": "manual_pass",
+                "reviewer_override": False,
+                "evidence": ["Contradiction review passed for this row."],
+            },
+            "safety_review_status": {
+                "status": "passed",
+                "reviewer_override": False,
+                "evidence": ["Safety review passed for this row."],
+            },
+            "gold_label_review_status": {
+                "status": "manual_pass",
+                "reviewer_override": False,
+                "evidence": ["Gold labels match for this row."],
+            },
+        }
+
+        semantic = dataset_readiness.manual_gate_report(
+            [approved_review],
+            self.rows[:2],
+            fields=("semantic_equivalence_status",),
+            ready_reason_code="all semantic evidence present",
+            blocked_reason_code="semantic_missing",
+        )
+        nli = dataset_readiness.manual_gate_report(
+            [approved_review],
+            self.rows[:2],
+            fields=("nli_equivalence_status", "contradiction_status"),
+            ready_reason_code="all nli evidence present",
+            blocked_reason_code="nli_missing",
+        )
+
+        self.assertEqual(semantic["status"], "blocked")
+        self.assertEqual(nli["status"], "blocked")
+        self.assertIn(
+            {"persona_id": "fixture_002", "field": "semantic_equivalence_status", "status": "missing_review_row"},
+            semantic["incomplete"],
+        )
+        self.assertIn(
+            {"persona_id": "fixture_002", "field": "nli_equivalence_status", "status": "missing_review_row"},
+            nli["incomplete"],
         )
 
 

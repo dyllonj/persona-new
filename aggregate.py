@@ -536,8 +536,50 @@ def readiness_status(status: str, reason_code: str | None, evidence: str | None 
     }
 
 
-def full_dataset_readiness() -> dict[str, Any]:
-    return full_dataset_readiness_report()
+def _resolve_manifest_path(path_value: str | Path | None) -> Path | None:
+    if path_value is None:
+        return None
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def _assert_hash_matches(path: Path, expected_hash: str | None, label: str) -> None:
+    if expected_hash is None:
+        return
+    actual_hash = hash_file_bytes(path)
+    if actual_hash != expected_hash:
+        raise PersonaValidationError(
+            f"{label} hash mismatch: manifest has {expected_hash}, {path} has {actual_hash}"
+        )
+
+
+def full_dataset_readiness(
+    *,
+    persona_path: str | Path | None = None,
+    review_manifest_path: str | Path | None = None,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if manifest is not None:
+        persona_path = persona_path or manifest.get("persona_path")
+        review_manifest_path = review_manifest_path if review_manifest_path is not None else manifest.get("review_manifest_path")
+    if persona_path is None:
+        raise PersonaValidationError(
+            "aggregate readiness requires a persona path from the run manifest or --persona-path"
+        )
+    resolved_persona_path = _resolve_manifest_path(persona_path)
+    if resolved_persona_path is None:
+        raise PersonaValidationError("aggregate readiness could not resolve persona path")
+    if manifest is not None:
+        _assert_hash_matches(resolved_persona_path, manifest.get("persona_jsonl_hash"), "persona JSONL")
+    resolved_review_path = _resolve_manifest_path(review_manifest_path)
+    if manifest is not None and resolved_review_path is not None:
+        _assert_hash_matches(resolved_review_path, manifest.get("review_manifest_hash"), "review manifest")
+    return full_dataset_readiness_report(
+        persona_path=resolved_persona_path,
+        review_manifest_path=resolved_review_path,
+    )
 
 
 def statistical_method_notes() -> dict[str, Any]:
@@ -559,6 +601,8 @@ def build_report(
     *,
     manifest_path: str | Path,
     results_path: str | Path,
+    persona_path: str | Path | None = None,
+    review_manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     manifest = load_manifest(manifest_path)
     rows = load_result_rows(results_path)
@@ -580,6 +624,12 @@ def build_report(
             "adapter": manifest.get("adapter"),
             "serving_stack": manifest.get("serving_stack"),
             "scoring_capability": manifest.get("scoring_capability"),
+            "persona_path": manifest.get("persona_path"),
+            "persona_jsonl_hash": manifest.get("persona_jsonl_hash"),
+            "review_manifest_path": manifest.get("review_manifest_path"),
+            "review_manifest_hash": manifest.get("review_manifest_hash"),
+            "promotion_manifest_path": manifest.get("promotion_manifest_path"),
+            "promotion_manifest_hash": manifest.get("promotion_manifest_hash"),
         },
         "counts": {
             "persona_count": len(grouped),
@@ -603,7 +653,11 @@ def build_report(
         },
         "paired_output_deltas": summarize_output_deltas(rows),
         "statistical_method_notes": statistical_method_notes(),
-        "full_dataset_readiness": full_dataset_readiness(),
+        "full_dataset_readiness": full_dataset_readiness(
+            persona_path=persona_path,
+            review_manifest_path=review_manifest_path,
+            manifest=manifest,
+        ),
         "known_limitations": [
             "Fixture/mock aggregation does not establish real Persona Adherence.",
             "Token-KL is unavailable unless aligned continuation scoring returns status=ok.",
@@ -693,6 +747,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, help="Path to run manifest JSON")
     parser.add_argument("--results", required=True, help="Path to result rows JSONL")
     parser.add_argument("--out", required=True, help="Output directory for aggregate report and chart data")
+    parser.add_argument("--persona-path", help="Override persona JSONL path for readiness binding")
+    parser.add_argument("--review-manifest", help="Override review manifest JSONL path for readiness binding")
     return parser
 
 
@@ -700,7 +756,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        report = build_report(manifest_path=args.manifest, results_path=args.results)
+        report = build_report(
+            manifest_path=args.manifest,
+            results_path=args.results,
+            persona_path=args.persona_path,
+            review_manifest_path=args.review_manifest,
+        )
         written = write_report(report, args.out)
     except (OSError, json.JSONDecodeError, PersonaValidationError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

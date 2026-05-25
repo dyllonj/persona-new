@@ -1,0 +1,64 @@
+{
+  "schema_version": "run_config_template_v1",
+  "template_status": "fill_before_use",
+  "stage": "full",
+  "serving_stack": "vllm",
+  "adapter": "vllm",
+  "base_url": "http://localhost:8000/v1",
+  "persona_path": "data/personas.full.jsonl",
+  "variants_per_persona": 6,
+  "model_count": 2,
+  "seed_count": 2,
+  "seeds": [1, 2],
+  "expected_generation_calls": 4800,
+  "run_id": "full_200_<YYYYMMDD>",
+  "output_dir": "results/full_200_<YYYYMMDD>",
+  "report_dir": "reports/full_200_<YYYYMMDD>",
+  "models": {
+    "base": {
+      "id": "<base-model-id>",
+      "revision_or_hash": "<base-model-revision-or-hash>"
+    },
+    "tuned": {
+      "id": "<tuned-model-id>",
+      "revision_or_hash": "<tuned-model-revision-or-hash>"
+    }
+  },
+  "runtime_metadata": {
+    "code_commit": "<git-commit-recorded-by-manifest>",
+    "dirty_worktree": "<dirty-marker-recorded-by-manifest>",
+    "dataset_hash": "<sha256-data-personas-full-jsonl>",
+    "prompt_template_hash": "<sha256-prompt-template>",
+    "tokenizer_name": "<tokenizer-name>",
+    "tokenizer_hash": "<sha256-tokenizer-or-package-hash>",
+    "chat_template_hash": "<sha256-chat-template-hash>",
+    "serving_stack_version": "<vllm-version>",
+    "gpu_cuda_driver": "<gpu-cuda-driver-summary>"
+  },
+  "decoding_params": {
+    "temperature": 0.0,
+    "max_tokens": 140
+  },
+  "guardrails": {
+    "required_preflight_command": "python3 persona_eval.py preflight --stage full --persona-path data/personas.full.jsonl --model-count 2 --seed-count 2 --promotion-manifest <promotion-manifest.json> --review-manifest <full-review.jsonl> --smoke-evidence <smoke-evidence.json> --dev-evidence <dev-evidence.json> --full-run-approval <full-run-approval.json> --model-base <base-model-id> --model-tuned <tuned-model-id> --model-base-revision-or-hash <base-revision> --model-tuned-revision-or-hash <tuned-revision> --tokenizer-name <tokenizer-name> --tokenizer-hash <tokenizer-hash> --chat-template-hash <chat-template-hash> --serving-stack-version <vllm-version>",
+    "dataset_promotion_manifest_required": true,
+    "full_review_manifest_required": true,
+    "smoke_evidence_required": true,
+    "dev_evidence_required": true,
+    "explicit_full_run_approval_required": true,
+    "runtime_metadata_required": [
+      "code_commit",
+      "dirty_worktree",
+      "dataset_hash",
+      "prompt_template_hash",
+      "model_ids",
+      "model_revisions",
+      "tokenizer_hash",
+      "chat_template_hash",
+      "serving_stack_version"
+    ],
+    "do_not_execute_until_preflight_passes": true,
+    "do_not_modify_data_personas_full_jsonl": true,
+    "do_not_bypass_staged_execution_caps": true
+  }
+}

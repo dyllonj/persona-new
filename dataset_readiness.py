@@ -627,14 +627,40 @@ def gold_label_preview_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def manual_gate_report(
     review_rows: list[dict[str, Any]],
+    persona_rows: list[dict[str, Any]],
     *,
     fields: tuple[str, ...],
     ready_reason_code: str,
     blocked_reason_code: str,
+    machine_validator_evidence_by_persona: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     incomplete: list[dict[str, str]] = []
-    for row in review_rows:
+    if not persona_rows:
+        return {
+            "status": "blocked",
+            "reason_code": blocked_reason_code,
+            "incomplete": [{"persona_id": "<none>", "field": ",".join(fields), "status": "no_persona_rows"}],
+        }
+    review_by_id = {row["persona_id"]: row for row in review_rows if isinstance(row.get("persona_id"), str)}
+    machine_validator_evidence_by_persona = machine_validator_evidence_by_persona or {}
+    for persona_row in persona_rows:
+        persona_id = str(persona_row.get("persona_id", "<missing>"))
+        row = review_by_id.get(persona_id)
         for field in fields:
+            machine_gate = machine_validator_evidence_by_persona.get(persona_id, {}).get(field, {})
+            machine_status = machine_gate.get("status") if isinstance(machine_gate, dict) else None
+            machine_evidence = machine_gate.get("evidence") if isinstance(machine_gate, dict) else None
+            if machine_status in PASSING_GATE_STATUSES and isinstance(machine_evidence, list) and machine_evidence:
+                continue
+            if row is None:
+                incomplete.append(
+                    {
+                        "persona_id": persona_id,
+                        "field": field,
+                        "status": "missing_review_row",
+                    }
+                )
+                continue
             gate = row.get(field, {})
             status = gate.get("status") if isinstance(gate, dict) else None
             evidence = gate.get("evidence") if isinstance(gate, dict) else None
@@ -754,6 +780,7 @@ def full_dataset_readiness_report(
 
     semantic_report = manual_gate_report(
         review_rows,
+        rows,
         fields=("semantic_equivalence_status",),
         ready_reason_code="Semantic equivalence status has review evidence for every row.",
         blocked_reason_code="semantic_equivalence_manual_required_or_missing",
@@ -766,6 +793,7 @@ def full_dataset_readiness_report(
 
     nli_report = manual_gate_report(
         review_rows,
+        rows,
         fields=("nli_equivalence_status", "contradiction_status"),
         ready_reason_code="NLI equivalence and contradiction statuses have review evidence for every row.",
         blocked_reason_code="nli_or_contradiction_manual_required_or_missing",

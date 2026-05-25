@@ -9,6 +9,7 @@
     "timestamp_utc",
     "code_commit",
     "dirty_worktree",
+    "persona_path",
     "persona_jsonl_hash",
     "prompt_template_version",
     "prompt_template_hash",
@@ -30,7 +31,13 @@
     "stop_sequences",
     "extractor_version",
     "embedding_model_revision",
-    "nli_or_judge_model_revision"
+    "nli_or_judge_model_revision",
+    "review_manifest_path",
+    "review_manifest_hash",
+    "promotion_manifest_path",
+    "promotion_manifest_hash",
+    "raw_request_response_logging_status",
+    "raw_request_response_logging"
   ],
   "properties": {
     "run_id": {
@@ -47,6 +54,10 @@
     },
     "dirty_worktree": {
       "type": "boolean"
+    },
+    "persona_path": {
+      "type": "string",
+      "minLength": 1
     },
     "persona_jsonl_hash": {
       "type": "string",
@@ -139,6 +150,13 @@
     "nli_or_judge_model_revision": {
       "type": "string",
       "minLength": 1
+    },
+    "review_manifest_path": {
+      "type": ["string", "null"]
+    },
+    "review_manifest_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "promotion_manifest_path": {
       "type": ["string", "null"]
