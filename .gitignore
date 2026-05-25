@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 results/autoresearch/
 results/sprint3_mock/
+results/sprint4_mock/
+reports/
