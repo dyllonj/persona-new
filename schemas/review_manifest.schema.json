@@ -38,6 +38,13 @@
       "type": "string",
       "minLength": 1
     },
+    "unresolved_concerns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "low_confidence_flags": {
       "type": "array",
       "uniqueItems": true,

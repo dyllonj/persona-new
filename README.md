@@ -209,6 +209,22 @@ Unvalidated candidate pools must stay outside `data/`. Use `candidates/` for
 local candidate pools; it is ignored by git. Do not commit candidate pools or
 `data/personas.full.jsonl` without explicit approval.
 
+## Sprint 7 Promotion Dry Run
+
+Sprint 7 promotion scaffolding validates a proposed 200-row promotion set
+without writing the full dataset when `--dry-run` is used:
+
+```bash
+python3 dataset_promotion.py validate-candidates --candidate-path candidates/approved_candidates.jsonl --review-path reviews/personas.full.review.jsonl
+python3 dataset_promotion.py promote --candidate-path candidates/approved_candidates.jsonl --review-path reviews/personas.full.review.jsonl --out data/personas.full.jsonl --dry-run
+```
+
+Promotion remains blocked unless the candidate set has exactly 200 valid rows,
+all required review evidence is present, low-confidence rows are reviewed,
+restricted categories are absent, duplicate candidates are absent, and all
+manual semantic/NLI/contradiction/safety/gold-label gates have passing evidence.
+Non-dry writes are refused unless every gate passes.
+
 ## Full Run Gate
 
 Do not run the full `4,800`-call benchmark until a 20-persona smoke run has
