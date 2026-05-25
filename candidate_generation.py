@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import dataset_readiness
 from persona_eval import (
     REQUIRED_VARIANT_TYPES,
     PersonaValidationError,
@@ -28,12 +29,16 @@ REPO_ROOT = Path(__file__).resolve().parent
 CANDIDATE_SCHEMA_PATH = REPO_ROOT / "schemas" / "candidate_persona.schema.json"
 CANDIDATE_SCHEMA_VERSION = "sprint6_candidate_persona_v1"
 CANDIDATE_MANIFEST_SCHEMA_VERSION = "sprint6_candidate_manifest_v1"
-GENERATOR_VERSION = "sprint6_fixture_generator_v1"
-VALIDATOR_VERSION = "sprint6_candidate_validator_v1"
-FIXTURE_TEMPLATE_VERSION = "sprint6_fixture_templates_v1"
+GENERATOR_VERSION = "sprint7_fixture_generator_v2"
+VALIDATOR_VERSION = "sprint7_candidate_validator_v2"
+FIXTURE_TEMPLATE_VERSION = "sprint7_fixture_templates_v2"
+DIVERSITY_REPORT_VERSION = "sprint7_candidate_diversity_v1"
 FIXTURE_CREATED_AT = "2026-05-25T00:00:00Z"
 FIXTURE_RETRIEVED_AT = "2026-05-25"
 DEFAULT_FIXTURE_COUNT = 300
+DEFAULT_SELECTION_COUNT = 200
+NEAR_DUPLICATE_THRESHOLD = 0.92
+MAX_REPORT_EXAMPLES = 50
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,151 @@ class FixtureBlueprint:
     prefix: str
     distractor: str
     distractor_category: str
+
+
+@dataclass(frozen=True)
+class DiversityProfile:
+    profile_id: str
+    setting: str
+    stakeholder: str
+    artifact: str
+    constraint: str
+    signal: str
+    evidence_mode: str
+    review_lens: str
+    response_frame: str
+    anchor_terms: tuple[str, ...]
+
+
+DIVERSITY_SETTINGS: tuple[str, ...] = (
+    "warehouse intake lane",
+    "subscription renewal queue",
+    "field service dispatch",
+    "partner onboarding desk",
+    "grant reporting cycle",
+    "release triage room",
+    "claims intake review",
+    "inventory reconciliation window",
+    "community program rollout",
+    "enterprise pilot board",
+)
+DIVERSITY_STAKEHOLDERS: tuple[str, ...] = (
+    "regional operations lead",
+    "customer success manager",
+    "site reliability owner",
+    "quality analyst",
+    "finance controller",
+    "security coordinator",
+    "training facilitator",
+    "data platform owner",
+    "support escalation lead",
+    "implementation sponsor",
+    "program analyst",
+)
+DIVERSITY_ARTIFACTS: tuple[str, ...] = (
+    "capacity model",
+    "handoff memo",
+    "audit checklist",
+    "sample evidence packet",
+    "timeline register",
+    "exception log",
+    "baseline workbook",
+    "survey summary",
+    "change-control ticket",
+    "operating procedure",
+    "risk matrix",
+    "qa worksheet",
+    "dependency map",
+)
+DIVERSITY_CONSTRAINTS: tuple[str, ...] = (
+    "weekend staffing limit",
+    "legacy integration window",
+    "vendor response lag",
+    "regional policy variance",
+    "limited sample coverage",
+    "missing baseline notes",
+    "ambiguous approval owner",
+    "delayed telemetry export",
+    "seasonal demand swing",
+    "cross-team handoff gap",
+    "manual reconciliation burden",
+    "tight rollback window",
+    "stale training material",
+    "unclear escalation path",
+    "partial tracking coverage",
+    "new supplier dependency",
+    "compressed review schedule",
+)
+DIVERSITY_SIGNALS: tuple[str, ...] = (
+    "variance spike",
+    "handoff delay",
+    "backlog growth",
+    "quality drift",
+    "control exception",
+    "adoption plateau",
+    "error burst",
+    "capacity squeeze",
+    "timeline slip",
+    "audit gap",
+    "data freshness drop",
+    "stakeholder conflict",
+    "scope expansion",
+    "queue imbalance",
+    "missing trace",
+    "test flake",
+    "usage mismatch",
+    "forecast wobble",
+    "review bottleneck",
+)
+DIVERSITY_EVIDENCE_MODES: tuple[str, ...] = (
+    "time-stamped log comparison",
+    "before-and-after sample review",
+    "owner-attested control check",
+    "source-record reconciliation",
+    "runbook step verification",
+    "ticket-history sampling",
+    "baseline-to-current diff",
+    "stakeholder interview summary",
+    "metric lineage trace",
+    "support-case cluster review",
+    "dependency owner confirmation",
+    "acceptance-criteria audit",
+    "capacity forecast replay",
+    "exception expiry review",
+    "handoff artifact inspection",
+    "coverage matrix check",
+    "change-window timeline",
+    "risk register update",
+    "post-action evidence review",
+)
+DIVERSITY_REVIEW_LENSES: tuple[str, ...] = (
+    "operational readiness",
+    "measurement integrity",
+    "customer impact",
+    "source traceability",
+    "change control",
+    "exception handling",
+    "handoff discipline",
+    "capacity realism",
+    "evidence freshness",
+    "decision reversibility",
+    "failure containment",
+    "baseline discipline",
+    "review ownership",
+)
+DIVERSITY_RESPONSE_FRAMES: tuple[str, ...] = (
+    "separate confirmed facts from assumptions",
+    "name the smallest useful next check",
+    "state the decision threshold",
+    "list evidence before recommendation",
+    "compare risk and reversibility",
+    "identify the missing owner",
+    "show what would change the answer",
+    "flag the operational dependency",
+    "preserve uncertainty explicitly",
+    "keep the action bounded",
+    "prioritize the review sequence",
+)
 
 
 FIXTURE_BLUEPRINTS: tuple[FixtureBlueprint, ...] = (
@@ -403,29 +553,69 @@ def candidate_manifest_path(candidate_path: str | Path) -> Path:
     return path.with_suffix(".manifest.json")
 
 
-def _variant_set(candidate_id: str, blueprint: FixtureBlueprint, serial: int) -> list[dict[str, Any]]:
+def _diversity_profile(serial: int) -> DiversityProfile:
+    serial_index = serial - 1
+    cycle_index = serial_index // len(FIXTURE_BLUEPRINTS)
+    blueprint_index = serial_index % len(FIXTURE_BLUEPRINTS)
+
+    def pick(values: tuple[str, ...], *, multiplier: int, offset: int = 0) -> str:
+        return values[(cycle_index * multiplier + blueprint_index + offset) % len(values)]
+
+    anchor_digest = sha256_text(f"fixture-diversity-anchor:{serial}").removeprefix("sha256:")
+    anchor_terms = tuple(f"anchor_{anchor_digest[offset:offset + 8]}" for offset in range(0, 48, 8))
+
+    return DiversityProfile(
+        profile_id=f"profile_{cycle_index + 1:03d}",
+        setting=pick(DIVERSITY_SETTINGS, multiplier=3),
+        stakeholder=pick(DIVERSITY_STAKEHOLDERS, multiplier=5, offset=1),
+        artifact=pick(DIVERSITY_ARTIFACTS, multiplier=7, offset=2),
+        constraint=pick(DIVERSITY_CONSTRAINTS, multiplier=11, offset=3),
+        signal=pick(DIVERSITY_SIGNALS, multiplier=13, offset=4),
+        evidence_mode=pick(DIVERSITY_EVIDENCE_MODES, multiplier=17, offset=5),
+        review_lens=pick(DIVERSITY_REVIEW_LENSES, multiplier=19, offset=6),
+        response_frame=pick(DIVERSITY_RESPONSE_FRAMES, multiplier=23, offset=7),
+        anchor_terms=anchor_terms,
+    )
+
+
+def _case_context(blueprint: FixtureBlueprint, profile: DiversityProfile) -> str:
+    return (
+        f"{profile.setting} for the {profile.stakeholder}, using the {profile.artifact} "
+        f"while dealing with {profile.constraint} and a {profile.signal}"
+    )
+
+
+def _variant_set(
+    candidate_id: str,
+    blueprint: FixtureBlueprint,
+    serial: int,
+    profile: DiversityProfile,
+) -> list[dict[str, Any]]:
     scenario_label = f"scenario {serial:04d}"
+    case_context = _case_context(blueprint, profile)
     canonical = (
         f"In {scenario_label}, a {blueprint.subject} says {blueprint.claim} during the "
-        f"{blueprint.context}. Reply in character and {blueprint.immediate_action}."
+        f"{blueprint.context}. The case involves {case_context}. Reply in character and "
+        f"{blueprint.immediate_action}."
     )
     paraphrase = (
         f"For {scenario_label}, respond in character to a {blueprint.subject}'s claim about "
-        f"{blueprint.claim}; name the evidence you need: {blueprint.evidence_target}."
+        f"{blueprint.claim}; use the {profile.review_lens} lens and name the evidence you "
+        f"need: {blueprint.evidence_target}, plus {profile.evidence_mode}."
     )
     negation = (
         f"Do not accept {blueprint.claim} in {scenario_label} without review; reply in "
-        f"character and {blueprint.immediate_action}."
+        f"character, account for {profile.constraint}, and {blueprint.immediate_action}."
     )
     distractor = (
         f"In {scenario_label}, a {blueprint.subject} says {blueprint.claim} during the "
-        f"{blueprint.context}. Unrelated detail: {blueprint.distractor}. Reply in character "
-        f"and {blueprint.immediate_action}."
+        f"{blueprint.context}. Relevant case detail: {case_context}. Unrelated detail: "
+        f"{blueprint.distractor}. Reply in character and {blueprint.immediate_action}."
     )
     prefixed = f"{blueprint.prefix}. {canonical}"
     robust = (
         f"Before acting on {blueprint.claim} for {scenario_label}, answer in character with "
-        f"the proof points or limits that matter most."
+        f"the proof points or limits that matter most; {profile.response_frame}."
     )
     return [
         {"variant_id": f"{candidate_id}_v0", "type": "canonical", "text": canonical},
@@ -466,12 +656,14 @@ def build_fixture_candidate(serial: int) -> dict[str, Any]:
     if serial < 1:
         raise PersonaValidationError("fixture serial must be positive")
     blueprint = FIXTURE_BLUEPRINTS[(serial - 1) % len(FIXTURE_BLUEPRINTS)]
+    profile = _diversity_profile(serial)
     candidate_id = f"candidate_{serial:04d}"
     scenario_label = f"scenario {serial:04d}"
     blueprint_payload = {
         "serial": serial,
         "template_id": blueprint.template_id,
         "template_version": FIXTURE_TEMPLATE_VERSION,
+        "diversity_profile": profile.__dict__,
     }
     behavior_labels = {
         "stance": blueprint.stance,
@@ -488,13 +680,16 @@ def build_fixture_candidate(serial: int) -> dict[str, Any]:
         "source_trace": {
             "trace_id": f"trace_{candidate_id}",
             "source_type": "local_synthetic_blueprint",
-            "source_id": f"{blueprint.template_id}:{serial:04d}",
+            "source_id": f"{blueprint.template_id}:{profile.profile_id}:{serial:04d}",
             "template_id": blueprint.template_id,
             "template_version": FIXTURE_TEMPLATE_VERSION,
             "input_index": serial,
             "input_hash": sha256_text(_json_dumps(blueprint_payload)),
             "source_inventory_key": "local_synthetic_sprint6_candidates",
-            "derivation_notes": "Deterministically assembled from local fixture blueprints; no network, API, GPU, or model call was used.",
+            "derivation_notes": (
+                "Deterministically assembled from local fixture blueprints plus "
+                "profile-based diversity axes; no network, API, GPU, or model call was used."
+            ),
         },
         "validation_status": {
             "status": "schema_validated",
@@ -505,6 +700,7 @@ def build_fixture_candidate(serial: int) -> dict[str, Any]:
                 "source_provenance",
                 "six_variant_contract",
                 "duplicate_id_scan",
+                "near_duplicate_diversity_scan",
             ],
         },
         "promotion_status": {
@@ -518,22 +714,29 @@ def build_fixture_candidate(serial: int) -> dict[str, Any]:
             "license": "CC0-1.0",
             "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
             "split": "fixture_candidates",
-            "source_persona_id": f"sprint6_candidate_source_{serial:04d}",
+            "source_persona_id": f"sprint7_candidate_source_{serial:04d}",
             "retrieved_at": FIXTURE_RETRIEVED_AT,
             "revision_or_hash": GENERATOR_VERSION,
-            "modification_notes": "Authored as a deterministic local Sprint 6 candidate fixture from template blueprints.",
+            "modification_notes": (
+                "Authored as a deterministic local Sprint 7 candidate fixture from "
+                "template blueprints and diversity profiles."
+            ),
             "redistribution_notes": "Local synthetic candidate may be redistributed under CC0-1.0 with repository attribution.",
         },
         "persona_spec": {
-            "domain": blueprint.domain,
+            "domain": f"{blueprint.domain} / {profile.review_lens} / {profile.setting}",
             "facts": [
                 *blueprint.facts,
                 f"I am evaluating {scenario_label} in the {blueprint.context}.",
+                f"I account for {profile.constraint} before deciding.",
+                f"I check the {profile.artifact} when a {profile.signal} appears.",
+                f"I use {profile.evidence_mode} for the {profile.stakeholder}.",
+                f"I preserve fixture diversity anchors {' '.join(profile.anchor_terms)}.",
             ],
             "traits": {
-                "tone": list(blueprint.tone),
-                "style": list(blueprint.style),
-                "values": list(blueprint.values),
+                "tone": [*blueprint.tone, profile.review_lens],
+                "style": [*blueprint.style, profile.response_frame],
+                "values": [*blueprint.values, profile.evidence_mode],
             },
             "forbidden_behaviors": list(blueprint.forbidden_behaviors),
         },
@@ -541,13 +744,14 @@ def build_fixture_candidate(serial: int) -> dict[str, Any]:
             "prompt_id": f"{candidate_id}_seed",
             "text": (
                 f"In {scenario_label}, a {blueprint.subject} says {blueprint.claim} during the "
-                f"{blueprint.context}. Reply in character and {blueprint.immediate_action}."
+                f"{blueprint.context}. The case includes {_case_context(blueprint, profile)}. "
+                f"Reply in character and {blueprint.immediate_action}."
             ),
             "intent": blueprint.intent,
-            "topic": blueprint.topic,
+            "topic": f"{blueprint.topic} / {profile.review_lens}",
         },
         "expected_behavior": behavior_labels,
-        "variants": _variant_set(candidate_id, blueprint, serial),
+        "variants": _variant_set(candidate_id, blueprint, serial, profile),
         "annotation": {
             "gold_labels": behavior_labels,
             "safety_class": "benign",
@@ -631,9 +835,224 @@ def source_inventory(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def build_candidate_manifest(candidate_path: str | Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _candidate_dedupe_text(row: dict[str, Any]) -> str:
+    return dataset_readiness.normalize_text_for_dedupe(dataset_readiness.persona_dedupe_text(row))
+
+
+def deterministic_candidate_similarity(left: str, right: str) -> float:
+    left_tokens = set(left.split())
+    right_tokens = set(right.split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+
+
+def candidate_near_duplicate_pairs(
+    rows: list[dict[str, Any]],
+    *,
+    threshold: float = NEAR_DUPLICATE_THRESHOLD,
+) -> list[dict[str, Any]]:
+    if threshold <= 0.0 or threshold > 1.0:
+        raise PersonaValidationError("near-duplicate threshold must be in (0, 1]")
+    normalized = [(row["persona_id"], _candidate_dedupe_text(row)) for row in rows]
+    pairs: list[dict[str, Any]] = []
+    for left_index in range(len(normalized)):
+        left_id, left_text = normalized[left_index]
+        for right_index in range(left_index + 1, len(normalized)):
+            right_id, right_text = normalized[right_index]
+            if left_text == right_text:
+                continue
+            similarity = deterministic_candidate_similarity(left_text, right_text)
+            if similarity >= threshold:
+                pairs.append(
+                    {
+                        "persona_ids": [left_id, right_id],
+                        "similarity": similarity,
+                        "threshold": threshold,
+                    }
+                )
+    return pairs
+
+
+def candidate_hashes(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "candidate_id": row["candidate_id"],
+            "persona_id": row["persona_id"],
+            "row_hash": sha256_text(_json_dumps(row)),
+            "dedupe_text_hash": sha256_text(_candidate_dedupe_text(row)),
+        }
+        for row in rows
+    ]
+
+
+def candidate_content_hashes(candidate_path: str | Path, rows: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        "output_hash": sha256_bytes(Path(candidate_path).read_bytes()),
+        "candidate_ids_hash": sha256_text("\n".join(row["candidate_id"] for row in rows)),
+        "persona_ids_hash": sha256_text("\n".join(row["persona_id"] for row in rows)),
+        "dedupe_texts_hash": sha256_text("\n".join(_candidate_dedupe_text(row) for row in rows)),
+    }
+
+
+def _count_by_path(rows: list[dict[str, Any]], path: tuple[str, ...]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for row in rows:
+        value: Any = row
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, str) and value:
+            counts[value] += 1
+    return dict(sorted(counts.items()))
+
+
+def select_diverse_candidates(
+    rows: list[dict[str, Any]],
+    *,
+    target_count: int = DEFAULT_SELECTION_COUNT,
+    near_threshold: float = NEAR_DUPLICATE_THRESHOLD,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not isinstance(target_count, int) or isinstance(target_count, bool) or target_count < 1:
+        raise PersonaValidationError("selection target_count must be a positive integer")
+    if near_threshold <= 0.0 or near_threshold > 1.0:
+        raise PersonaValidationError("near-duplicate threshold must be in (0, 1]")
+    validate_candidate_rows(rows)
+
+    selected: list[dict[str, Any]] = []
+    selected_texts: list[tuple[str, str]] = []
+    rejection_reasons: list[dict[str, Any]] = []
+
+    for row in rows:
+        if len(selected) >= target_count:
+            continue
+        persona_id = row["persona_id"]
+        text = _candidate_dedupe_text(row)
+
+        exact_match = next((selected_id for selected_id, selected_text in selected_texts if selected_text == text), None)
+        if exact_match is not None:
+            rejection_reasons.append(
+                {
+                    "reason_code": "exact_duplicate_candidate_text",
+                    "persona_id": persona_id,
+                    "matched_persona_id": exact_match,
+                }
+            )
+            continue
+
+        near_match: dict[str, Any] | None = None
+        for selected_id, selected_text in selected_texts:
+            similarity = deterministic_candidate_similarity(text, selected_text)
+            if similarity >= near_threshold:
+                near_match = {
+                    "reason_code": "near_duplicate_candidate_text",
+                    "persona_id": persona_id,
+                    "matched_persona_id": selected_id,
+                    "similarity": similarity,
+                    "threshold": near_threshold,
+                }
+                break
+        if near_match is not None:
+            rejection_reasons.append(near_match)
+            continue
+
+        selected.append(row)
+        selected_texts.append((persona_id, text))
+
+    blocker_reasons: list[dict[str, Any]] = []
+    if len(selected) < target_count:
+        blocker_reasons.append(
+            {
+                "reason_code": "insufficient_diverse_candidates",
+                "selected_candidate_count": len(selected),
+                "target_count": target_count,
+            }
+        )
+
+    rejection_counts = dict(sorted(Counter(row["reason_code"] for row in rejection_reasons).items()))
+    status = "pass" if not blocker_reasons else "blocked"
+    report = {
+        "report_version": DIVERSITY_REPORT_VERSION,
+        "status": status,
+        "input_candidate_count": len(rows),
+        "target_count": target_count,
+        "selected_candidate_count": len(selected),
+        "selected_candidate_ids": [row["candidate_id"] for row in selected],
+        "not_selected_capacity_count": max(0, len(rows) - len(selected) - len(rejection_reasons)),
+        "rejected_candidate_count": len(rejection_reasons),
+        "rejection_counts": rejection_counts,
+        "rejection_reasons": rejection_reasons,
+        "blocker_reasons": blocker_reasons,
+        "near_duplicate_threshold": near_threshold,
+    }
+    return selected, report
+
+
+def candidate_dedupe_diversity_report(
+    rows: list[dict[str, Any]],
+    *,
+    target_count: int = DEFAULT_SELECTION_COUNT,
+    near_threshold: float = NEAR_DUPLICATE_THRESHOLD,
+) -> dict[str, Any]:
+    validate_candidate_rows(rows)
+    exact_groups = dataset_readiness.exact_duplicate_groups(rows)
+    near_pairs = candidate_near_duplicate_pairs(rows, threshold=near_threshold)
+    _selected, selection_report = select_diverse_candidates(
+        rows,
+        target_count=target_count,
+        near_threshold=near_threshold,
+    )
+
+    blocker_reasons: list[dict[str, Any]] = []
+    if exact_groups:
+        blocker_reasons.append(
+            {
+                "reason_code": "exact_duplicate_candidate_text",
+                "exact_duplicate_group_count": len(exact_groups),
+            }
+        )
+    if near_pairs:
+        blocker_reasons.append(
+            {
+                "reason_code": "near_duplicate_candidate_text",
+                "near_duplicate_pair_count": len(near_pairs),
+                "threshold": near_threshold,
+            }
+        )
+    blocker_reasons.extend(selection_report["blocker_reasons"])
+
+    status = "pass" if not blocker_reasons else "blocked"
+    return {
+        "report_version": DIVERSITY_REPORT_VERSION,
+        "status": status,
+        "row_count": len(rows),
+        "target_selection_count": target_count,
+        "selectable_candidate_count": selection_report["selected_candidate_count"],
+        "exact_duplicate_group_count": len(exact_groups),
+        "exact_duplicate_group_examples": exact_groups[:MAX_REPORT_EXAMPLES],
+        "exact_duplicate_groups_truncated": len(exact_groups) > MAX_REPORT_EXAMPLES,
+        "near_duplicate_pair_count": len(near_pairs),
+        "near_duplicate_pair_examples": near_pairs[:MAX_REPORT_EXAMPLES],
+        "near_duplicate_pairs_truncated": len(near_pairs) > MAX_REPORT_EXAMPLES,
+        "near_duplicate_threshold": near_threshold,
+        "source_template_counts": _count_by_path(rows, ("source_trace", "template_id")),
+        "domain_counts": _count_by_path(rows, ("persona_spec", "domain")),
+        "primary_action_counts": _count_by_path(rows, ("expected_behavior", "primary_action")),
+        "selection_report": selection_report,
+        "rejection_counts": selection_report["rejection_counts"],
+        "rejection_reasons": selection_report["rejection_reasons"],
+        "blocker_reasons": blocker_reasons,
+    }
+
+
+def build_candidate_manifest(
+    candidate_path: str | Path,
+    rows: list[dict[str, Any]],
+    *,
+    selection_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     path = Path(candidate_path)
-    output_hash = sha256_bytes(path.read_bytes())
+    content_hashes = candidate_content_hashes(path, rows)
+    diversity_report = candidate_dedupe_diversity_report(rows)
     manifest = {
         "candidate_manifest_schema_version": CANDIDATE_MANIFEST_SCHEMA_VERSION,
         "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
@@ -643,9 +1062,14 @@ def build_candidate_manifest(candidate_path: str | Path, rows: list[dict[str, An
         "created_at": FIXTURE_CREATED_AT,
         "candidate_path": _display_path(path),
         "row_count": len(rows),
-        "output_hash": output_hash,
+        "output_hash": content_hashes["output_hash"],
+        "content_hashes": content_hashes,
+        "candidate_hashes": candidate_hashes(rows),
         "source_inventory": source_inventory(rows),
         "variant_types": sorted(REQUIRED_VARIANT_TYPES),
+        "dedupe_diversity_report": diversity_report,
+        "rejection_reasons": diversity_report["rejection_reasons"],
+        "blocker_reasons": diversity_report["blocker_reasons"],
         "validation_summary": {
             "status": "pass",
             "validated_rows": len(rows),
@@ -654,10 +1078,13 @@ def build_candidate_manifest(candidate_path: str | Path, rows: list[dict[str, An
                 "source_provenance",
                 "six_variant_contract",
                 "duplicate_id_scan",
+                "near_duplicate_diversity_scan",
                 "data_directory_boundary",
             ],
         },
     }
+    if selection_report is not None:
+        manifest["selection_report"] = selection_report
     return manifest
 
 
@@ -674,6 +1101,11 @@ def validate_candidate_manifest(
         "row_count",
         "source_inventory",
         "output_hash",
+        "content_hashes",
+        "candidate_hashes",
+        "dedupe_diversity_report",
+        "rejection_reasons",
+        "blocker_reasons",
     }
     missing = sorted(required - set(manifest))
     if missing:
@@ -689,11 +1121,27 @@ def validate_candidate_manifest(
     expected_hash = sha256_bytes(Path(candidate_path).read_bytes())
     if manifest["output_hash"] != expected_hash:
         raise PersonaValidationError("candidate manifest output_hash does not match candidate file")
+    if manifest["content_hashes"] != candidate_content_hashes(candidate_path, rows):
+        raise PersonaValidationError("candidate manifest content_hashes do not match candidate file")
+    if manifest["candidate_hashes"] != candidate_hashes(rows):
+        raise PersonaValidationError("candidate manifest candidate_hashes do not match candidate rows")
     if manifest["source_inventory"] != source_inventory(rows):
         raise PersonaValidationError("candidate manifest source_inventory does not match candidate file")
+    expected_report = candidate_dedupe_diversity_report(rows)
+    if manifest["dedupe_diversity_report"] != expected_report:
+        raise PersonaValidationError("candidate manifest dedupe_diversity_report does not match candidate file")
+    if manifest["rejection_reasons"] != expected_report["rejection_reasons"]:
+        raise PersonaValidationError("candidate manifest rejection_reasons do not match candidate file")
+    if manifest["blocker_reasons"] != expected_report["blocker_reasons"]:
+        raise PersonaValidationError("candidate manifest blocker_reasons do not match candidate file")
 
 
-def write_candidate_rows(rows: list[dict[str, Any]], out: str | Path) -> tuple[Path, Path, dict[str, Any]]:
+def write_candidate_rows(
+    rows: list[dict[str, Any]],
+    out: str | Path,
+    *,
+    selection_report: dict[str, Any] | None = None,
+) -> tuple[Path, Path, dict[str, Any]]:
     out_path = assert_candidate_path_allowed(out)
     validate_candidate_rows(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -703,7 +1151,7 @@ def write_candidate_rows(rows: list[dict[str, Any]], out: str | Path) -> tuple[P
     tmp_path.write_text(body, encoding="utf-8")
     tmp_path.replace(out_path)
 
-    manifest = build_candidate_manifest(out_path, rows)
+    manifest = build_candidate_manifest(out_path, rows, selection_report=selection_report)
     manifest_path = candidate_manifest_path(out_path)
     manifest_tmp = manifest_path.with_name(manifest_path.name + ".tmp")
     manifest_tmp.write_text(
@@ -748,6 +1196,36 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_select(args: argparse.Namespace) -> int:
+    candidate_path = assert_candidate_path_allowed(args.candidate_path)
+    out_path = assert_candidate_path_allowed(args.out)
+    rows = load_candidate_rows(candidate_path)
+    selected_rows, selection_report = select_diverse_candidates(
+        rows,
+        target_count=args.count,
+        near_threshold=args.near_threshold,
+    )
+    if selection_report["status"] != "pass":
+        print(
+            "error: "
+            + json.dumps(selection_report["blocker_reasons"], sort_keys=True),
+            file=__import__("sys").stderr,
+        )
+        return 1
+    selected_path, manifest_path, manifest = write_candidate_rows(
+        selected_rows,
+        out_path,
+        selection_report=selection_report,
+    )
+    print(f"selected_candidate_path={_display_path(selected_path)}")
+    print(f"manifest_path={_display_path(manifest_path)}")
+    print(f"selection_status={selection_report['status']}")
+    print(f"selected_candidate_rows={selection_report['selected_candidate_count']}")
+    print(f"rejected_candidate_rows={selection_report['rejected_candidate_count']}")
+    print(f"output_hash={manifest['output_hash']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -766,6 +1244,23 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--candidate-path", required=True)
     validate_parser.add_argument("--manifest-path")
     validate_parser.set_defaults(func=cmd_validate)
+
+    select_parser = subparsers.add_parser("select", help="write a diverse candidate subset outside data/")
+    select_parser.add_argument("--candidate-path", required=True)
+    select_parser.add_argument("--out", required=True, help="selected candidate JSONL output path outside data/")
+    select_parser.add_argument(
+        "--count",
+        type=int,
+        default=DEFAULT_SELECTION_COUNT,
+        help=f"number of diverse candidates to select (default: {DEFAULT_SELECTION_COUNT})",
+    )
+    select_parser.add_argument(
+        "--near-threshold",
+        type=float,
+        default=NEAR_DUPLICATE_THRESHOLD,
+        help=f"near-duplicate threshold (default: {NEAR_DUPLICATE_THRESHOLD})",
+    )
+    select_parser.set_defaults(func=cmd_select)
     return parser
 
 

@@ -64,6 +64,11 @@ class CandidateGenerationTests(unittest.TestCase):
         )
         self.assertEqual(manifest["generator_version"], candidate_generation.GENERATOR_VERSION)
         self.assertTrue(manifest["output_hash"].startswith("sha256:"))
+        self.assertTrue(manifest["content_hashes"]["output_hash"].startswith("sha256:"))
+        self.assertEqual(len(manifest["candidate_hashes"]), 12)
+        self.assertIn("dedupe_diversity_report", manifest)
+        self.assertIn("blocker_reasons", manifest)
+        self.assertIn("rejection_reasons", manifest)
         self.assertEqual(
             manifest["source_inventory"][0]["dataset"],
             "local_synthetic_sprint6_candidates",
@@ -71,6 +76,48 @@ class CandidateGenerationTests(unittest.TestCase):
 
     def test_default_fixture_count_exceeds_sprint_6_minimum(self):
         self.assertGreater(candidate_generation.DEFAULT_FIXTURE_COUNT, 200)
+
+    def test_default_fixture_pool_is_diverse_enough_to_select_200(self):
+        rows = candidate_generation.generate_fixture_candidates()
+
+        report = candidate_generation.candidate_dedupe_diversity_report(rows)
+        selected, selection_report = candidate_generation.select_diverse_candidates(rows)
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["row_count"], 300)
+        self.assertEqual(report["exact_duplicate_group_count"], 0)
+        self.assertEqual(report["near_duplicate_pair_count"], 0)
+        self.assertEqual(report["blocker_reasons"], [])
+        self.assertEqual(report["rejection_reasons"], [])
+        self.assertEqual(len(selected), 200)
+        self.assertEqual(selection_report["status"], "pass")
+        self.assertEqual(selection_report["selected_candidate_count"], 200)
+        self.assertEqual(selection_report["rejection_reasons"], [])
+
+    def test_diverse_selector_rejects_duplicate_rows_before_capacity(self):
+        rows = candidate_generation.generate_fixture_candidates(count=205)
+        duplicate = copy.deepcopy(rows[0])
+        duplicate["candidate_id"] = "candidate_duplicate"
+        duplicate["persona_id"] = "candidate_duplicate"
+        duplicate["source_trace"]["trace_id"] = "trace_candidate_duplicate"
+        duplicate["source_trace"]["source_id"] = "duplicate_source"
+        duplicate["source"]["source_persona_id"] = "duplicate_source"
+        duplicate["seed_prompt"]["prompt_id"] = "candidate_duplicate_seed"
+        for index, variant in enumerate(duplicate["variants"]):
+            variant["variant_id"] = f"candidate_duplicate_v{index}"
+
+        selected, selection_report = candidate_generation.select_diverse_candidates(
+            [rows[0], duplicate, *rows[1:]],
+            target_count=200,
+        )
+
+        self.assertEqual(len(selected), 200)
+        self.assertEqual(selection_report["status"], "pass")
+        self.assertEqual(selection_report["rejection_counts"], {"exact_duplicate_candidate_text": 1})
+        self.assertEqual(
+            selection_report["rejection_reasons"][0]["matched_persona_id"],
+            rows[0]["persona_id"],
+        )
 
     def test_rejects_duplicate_candidate_ids(self):
         rows = candidate_generation.generate_fixture_candidates(count=2)
@@ -127,6 +174,7 @@ class CandidateGenerationTests(unittest.TestCase):
     def test_cli_create_and_validate(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "sample_candidates.jsonl"
+            selected = Path(tmp) / "selected_candidates.jsonl"
             create = subprocess.run(
                 [
                     sys.executable,
@@ -134,8 +182,6 @@ class CandidateGenerationTests(unittest.TestCase):
                     "create-fixtures",
                     "--out",
                     str(out),
-                    "--count",
-                    "4",
                 ],
                 cwd=ROOT,
                 check=False,
@@ -144,7 +190,7 @@ class CandidateGenerationTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
             )
             self.assertEqual(create.returncode, 0, create.stderr)
-            self.assertIn("candidate_rows=4", create.stdout)
+            self.assertIn("candidate_rows=300", create.stdout)
 
             validate = subprocess.run(
                 [
@@ -160,10 +206,29 @@ class CandidateGenerationTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            select = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "candidate_generation.py"),
+                    "select",
+                    "--candidate-path",
+                    str(out),
+                    "--out",
+                    str(selected),
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
 
         self.assertEqual(validate.returncode, 0, validate.stderr)
-        self.assertIn("valid_candidate_rows=4", validate.stdout)
+        self.assertIn("valid_candidate_rows=300", validate.stdout)
         self.assertIn("manifest_valid=true", validate.stdout)
+        self.assertEqual(select.returncode, 0, select.stderr)
+        self.assertIn("selection_status=pass", select.stdout)
+        self.assertIn("selected_candidate_rows=200", select.stdout)
 
     def test_manifest_validation_rejects_hash_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
