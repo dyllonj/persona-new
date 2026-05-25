@@ -11,11 +11,15 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
+import urllib.error
+import urllib.request
 
 try:
     import jsonschema
@@ -382,6 +386,130 @@ class MockAdapter(BaseAdapter):
             vocabulary_match=None,
             chat_template_hash_match=None,
             k=None,
+            endpoint_cap=None,
+            diagnostic_only=False,
+        )
+
+
+class VLLMOpenAIAdapter(BaseAdapter):
+    """Minimal OpenAI-compatible HTTP adapter for explicit tiny vLLM smoke runs."""
+
+    scoring_capability = "none"
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        adapter_name: str = "vllm",
+        api_key_env: str | None = None,
+        serving_stack: str = "vllm",
+        serving_stack_version: str = "not_available",
+        timeout_s: float = 60.0,
+    ) -> None:
+        if not base_url or not base_url.strip():
+            raise PersonaValidationError("--base-url is required for vllm/openai-compatible adapters")
+        self.adapter_name = adapter_name
+        self.provider_or_endpoint = base_url.rstrip("/")
+        self.serving_stack = serving_stack
+        self.serving_stack_version = serving_stack_version
+        self.timeout_s = timeout_s
+        self.api_key_env = api_key_env
+        self.api_key: str | None = None
+        if api_key_env:
+            self.api_key = os.environ.get(api_key_env)
+            if not self.api_key:
+                raise PersonaValidationError(f"--api-key-env {api_key_env!r} is not set")
+
+    def _chat_completions_url(self) -> str:
+        if self.provider_or_endpoint.endswith("/v1"):
+            return f"{self.provider_or_endpoint}/chat/completions"
+        return f"{self.provider_or_endpoint}/v1/chat/completions"
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        payload: dict[str, Any] = {
+            "model": request.model_id,
+            "messages": [
+                {"role": "system", "content": request.system_prompt},
+                {"role": "user", "content": request.prompt_text},
+            ],
+            "temperature": request.decoding_params.get("temperature", 0.0),
+            "max_tokens": request.decoding_params.get("max_tokens", 140),
+            "seed": request.seed,
+        }
+        if request.stop_sequences:
+            payload["stop"] = request.stop_sequences
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key is not None:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        http_request = urllib.request.Request(
+            self._chat_completions_url(),
+            data=json.dumps(payload, sort_keys=True).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        start = time.monotonic()
+        try:
+            with urllib.request.urlopen(http_request, timeout=self.timeout_s) as response:
+                body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise PersonaValidationError(f"{self.adapter_name} HTTP error {exc.code}: {body}") from exc
+        except urllib.error.URLError as exc:
+            raise PersonaValidationError(f"{self.adapter_name} request failed: {exc.reason}") from exc
+        latency_s = time.monotonic() - start
+
+        try:
+            raw_response = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise PersonaValidationError(f"{self.adapter_name} returned invalid JSON") from exc
+        choices = raw_response.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise PersonaValidationError(f"{self.adapter_name} response missing choices")
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise PersonaValidationError(f"{self.adapter_name} response choice must be an object")
+        message = first_choice.get("message")
+        if isinstance(message, dict):
+            response_text = message.get("content") or ""
+        else:
+            response_text = first_choice.get("text") or ""
+        if not isinstance(response_text, str):
+            raise PersonaValidationError(f"{self.adapter_name} response text must be a string")
+
+        usage_payload = raw_response.get("usage") if isinstance(raw_response.get("usage"), dict) else {}
+        prompt_tokens = int(usage_payload.get("prompt_tokens", token_count(request.system_prompt) + token_count(request.prompt_text)))
+        completion_tokens = int(usage_payload.get("completion_tokens", token_count(response_text)))
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(usage_payload.get("total_tokens", prompt_tokens + completion_tokens)),
+        }
+        finish_reason = first_choice.get("finish_reason") or "unknown"
+        return GenerationResult(
+            status="ok",
+            reason_code=None,
+            response_text=response_text,
+            stop_reason=str(finish_reason),
+            truncation_flag=finish_reason == "length",
+            usage=usage,
+            latency_s=latency_s,
+            raw_response=raw_response,
+        )
+
+    def score_continuation(self, request: ScoreContinuationRequest) -> ScoreContinuationResult:
+        return ScoreContinuationResult(
+            status="not_applicable",
+            value=None,
+            reason_code="aligned_scoring_unavailable",
+            scoring_path="none",
+            fixed_continuation_id=request.fixed_continuation_id,
+            fixed_continuation_hash=sha256_text(request.fixed_continuation),
+            tokenizer_hash_match=None,
+            vocabulary_match=None,
+            chat_template_hash_match=None,
+            k=request.k,
             endpoint_cap=None,
             diagnostic_only=False,
         )
@@ -1813,11 +1941,34 @@ def expected_call_count(
     )
 
 
+def parse_seeds(value: str | list[str] | tuple[str, ...] | None) -> list[int]:
+    if value is None:
+        raise PersonaValidationError("--seeds is required")
+    raw_parts: list[str] = []
+    if isinstance(value, str):
+        raw_parts = value.split(",")
+    else:
+        for item in value:
+            raw_parts.extend(str(item).split(","))
+    seeds: list[int] = []
+    for part in raw_parts:
+        stripped = part.strip()
+        if not stripped:
+            raise PersonaValidationError("--seeds must be a comma-separated list of integers")
+        try:
+            seeds.append(int(stripped))
+        except ValueError as exc:
+            raise PersonaValidationError("--seeds must be a comma-separated list of integers") from exc
+    if not seeds:
+        raise PersonaValidationError("--seeds must include at least one integer")
+    return seeds
+
+
 def _seed_count_from_args(args: argparse.Namespace) -> int:
     if args.seed_count is not None:
         return args.seed_count
     if args.seeds:
-        return len(args.seeds)
+        return len(parse_seeds(args.seeds))
     raise PersonaValidationError("plan requires --seed-count or --seeds")
 
 
@@ -1833,6 +1984,253 @@ def _model_count_from_args(args: argparse.Namespace) -> int:
             )
         return 2
     raise PersonaValidationError("plan requires --model-count or --model-base/--model-tuned")
+
+
+def _require_model_pair(args: argparse.Namespace) -> None:
+    if not args.model_base or not args.model_tuned:
+        raise PersonaValidationError("run requires --model-base and --model-tuned")
+
+
+def _validate_positive_int(value: int | None, name: str) -> int:
+    if value is None or value <= 0:
+        raise PersonaValidationError(f"{name} must be positive")
+    return value
+
+
+def _limited_rows(rows: list[dict[str, Any]], limit: int | None) -> list[dict[str, Any]]:
+    if limit is None:
+        return rows
+    _validate_positive_int(limit, "--limit-personas")
+    if limit > len(rows):
+        raise PersonaValidationError("--limit-personas cannot exceed validated persona row count")
+    return rows[:limit]
+
+
+def _run_persona_shape(args: argparse.Namespace) -> tuple[list[dict[str, Any]] | None, int, int]:
+    if args.persona_path:
+        rows = _limited_rows(validate_personas(args.persona_path), args.limit_personas)
+        variant_counts = {len(row["variants"]) for row in rows}
+        if len(variant_counts) != 1:
+            raise PersonaValidationError("all persona rows must have the same variant count")
+        return rows, len(rows), variant_counts.pop()
+
+    if args.dry_run and args.persona_count is not None and args.variants_per_persona is not None:
+        persona_count = _validate_positive_int(args.persona_count, "--persona-count")
+        variants_per_persona = _validate_positive_int(args.variants_per_persona, "--variants-per-persona")
+        if args.limit_personas is not None:
+            _validate_positive_int(args.limit_personas, "--limit-personas")
+            if args.limit_personas > persona_count:
+                raise PersonaValidationError("--limit-personas cannot exceed --persona-count")
+            persona_count = args.limit_personas
+        return None, persona_count, variants_per_persona
+
+    raise PersonaValidationError(
+        "run requires --persona-path, or --dry-run with --persona-count and --variants-per-persona"
+    )
+
+
+def _decoding_params_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.max_tokens <= 0:
+        raise PersonaValidationError("--max-tokens must be positive")
+    return {
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+    }
+
+
+def _adapter_from_args(args: argparse.Namespace) -> BaseAdapter:
+    if args.adapter == "mock":
+        return MockAdapter()
+    if args.adapter in {"vllm", "openai-compatible"}:
+        serving_stack = args.serving_stack
+        if serving_stack is None:
+            serving_stack = "vllm" if args.adapter == "vllm" else "openai_compatible"
+        return VLLMOpenAIAdapter(
+            base_url=args.base_url,
+            adapter_name=args.adapter,
+            api_key_env=args.api_key_env,
+            serving_stack=serving_stack,
+        )
+    raise PersonaValidationError(f"unsupported adapter: {args.adapter!r}")
+
+
+def _run_output_dir(args: argparse.Namespace) -> Path:
+    if not args.out:
+        raise PersonaValidationError("run requires --out unless --dry-run is used")
+    output_dir = Path(args.out)
+    if not output_dir.is_absolute():
+        output_dir = REPO_ROOT / output_dir
+    protected = (REPO_ROOT / "results" / "autoresearch").resolve()
+    resolved = output_dir.resolve()
+    if resolved == protected or resolved.is_relative_to(protected):
+        raise PersonaValidationError("persona_eval.py run must not write under results/autoresearch")
+    return output_dir
+
+
+def _disabled_token_kl_result() -> ScoreContinuationResult:
+    return ScoreContinuationResult(
+        status="not_applicable",
+        value=None,
+        reason_code="disabled_by_user",
+        scoring_path="none",
+        fixed_continuation_id=None,
+        fixed_continuation_hash=None,
+        tokenizer_hash_match=None,
+        vocabulary_match=None,
+        chat_template_hash_match=None,
+        k=None,
+        endpoint_cap=None,
+        diagnostic_only=False,
+    )
+
+
+def _score_result_for_run(
+    *,
+    args: argparse.Namespace,
+    adapter: BaseAdapter,
+    rendered: RenderedPrompt,
+    run_id: str,
+    persona_row: dict[str, Any],
+    variant: dict[str, Any],
+    seed: int,
+    model_id: str,
+    model_alias: str,
+    decoding_params: dict[str, Any],
+    stop_sequences: list[str],
+) -> ScoreContinuationResult:
+    if args.disable_token_kl or args.score_mode == "disabled":
+        return _disabled_token_kl_result()
+    score_request = build_score_continuation_request(
+        rendered=rendered,
+        run_id=run_id,
+        persona_id=persona_row["persona_id"],
+        variant_id=variant["variant_id"],
+        variant_type=variant["type"],
+        model_alias=model_alias,
+        model_id=model_id,
+        seed=seed,
+        decoding_params=decoding_params,
+        stop_sequences=stop_sequences,
+        fixed_continuation="not_used_without_aligned_scoring",
+        fixed_continuation_id="aligned-scoring-unavailable",
+        adapter=adapter,
+    )
+    return adapter.score_continuation(score_request)
+
+
+def _build_run_rows(
+    *,
+    rows: list[dict[str, Any]],
+    args: argparse.Namespace,
+    adapter: BaseAdapter,
+    run_id: str,
+    seeds: list[int],
+    decoding_params: dict[str, Any],
+    stop_sequences: list[str],
+) -> list[dict[str, Any]]:
+    result_rows: list[dict[str, Any]] = []
+    model_pair = {
+        "base": args.model_base,
+        "tuned": args.model_tuned,
+        "base_alias": args.model_base_alias,
+        "tuned_alias": args.model_tuned_alias,
+    }
+    for persona_row in rows:
+        for variant in persona_row["variants"]:
+            rendered = render_prompt(
+                persona_row,
+                variant,
+                prompt_template_version=args.prompt_template_version,
+            )
+            for seed in seeds:
+                base_request = build_generation_request(
+                    rendered=rendered,
+                    run_id=run_id,
+                    persona_id=persona_row["persona_id"],
+                    variant_id=variant["variant_id"],
+                    variant_type=variant["type"],
+                    model_alias=args.model_base_alias,
+                    model_id=args.model_base,
+                    seed=seed,
+                    decoding_params=decoding_params,
+                    stop_sequences=stop_sequences,
+                    adapter=adapter,
+                )
+                tuned_request = build_generation_request(
+                    rendered=rendered,
+                    run_id=run_id,
+                    persona_id=persona_row["persona_id"],
+                    variant_id=variant["variant_id"],
+                    variant_type=variant["type"],
+                    model_alias=args.model_tuned_alias,
+                    model_id=args.model_tuned,
+                    seed=seed,
+                    decoding_params=decoding_params,
+                    stop_sequences=stop_sequences,
+                    adapter=adapter,
+                )
+                base_result = adapter.generate(base_request)
+                tuned_result = adapter.generate(tuned_request)
+                score_result = _score_result_for_run(
+                    args=args,
+                    adapter=adapter,
+                    rendered=rendered,
+                    run_id=run_id,
+                    persona_row=persona_row,
+                    variant=variant,
+                    seed=seed,
+                    model_id=args.model_tuned,
+                    model_alias=args.model_tuned_alias,
+                    decoding_params=decoding_params,
+                    stop_sequences=stop_sequences,
+                )
+                result_rows.append(
+                    build_result_row(
+                        run_id=run_id,
+                        persona_row=persona_row,
+                        variant=variant,
+                        seed=seed,
+                        rendered=rendered,
+                        model_pair=model_pair,
+                        base_request=base_request,
+                        base_result=base_result,
+                        tuned_request=tuned_request,
+                        tuned_result=tuned_result,
+                        score_result=score_result,
+                    )
+                )
+    return result_rows
+
+
+def _write_run_outputs(
+    *,
+    output_dir: Path,
+    manifest: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> tuple[Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    results_path = output_dir / "results.jsonl"
+    manifest_tmp = output_dir / "manifest.json.tmp"
+    results_tmp = output_dir / "results.jsonl.tmp"
+
+    manifest_tmp.write_text(
+        json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with results_tmp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+    manifest_tmp.replace(manifest_path)
+    results_tmp.replace(results_path)
+    return manifest_path, results_path
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -1867,8 +2265,73 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    _require_model_pair(args)
+    seeds = parse_seeds(args.seeds)
+    decoding_params = _decoding_params_from_args(args)
+    stop_sequences: list[str] = []
+    adapter = _adapter_from_args(args)
+    rows, persona_count, variants_per_persona = _run_persona_shape(args)
+    planned_calls = expected_call_count(persona_count, variants_per_persona, 2, len(seeds))
+
+    if args.out:
+        _run_output_dir(args)
+    if args.dry_run:
+        print(f"planned_generation_calls={planned_calls}")
+        return 0
+    if rows is None:
+        raise PersonaValidationError("non-dry run requires --persona-path")
+    if persona_count >= 200 and args.limit_personas is None:
+        raise PersonaValidationError("full 200-persona runs are gated; use --limit-personas for staged smoke runs")
+
+    output_dir = _run_output_dir(args)
+    run_id = args.run_id or dt.datetime.now(dt.UTC).strftime("run-%Y%m%dT%H%M%SZ")
+    manifest = create_run_manifest(
+        persona_path=args.persona_path,
+        model_base=args.model_base,
+        model_tuned=args.model_tuned,
+        seeds=seeds,
+        run_id=run_id,
+        prompt_template_version=args.prompt_template_version,
+        adapter=adapter.adapter_name,
+        provider_or_endpoint=adapter.provider_or_endpoint,
+        serving_stack=adapter.serving_stack,
+        serving_stack_version=adapter.serving_stack_version,
+        scoring_capability=adapter.scoring_capability,
+        decoding_params=decoding_params,
+        stop_sequences=stop_sequences,
+        extractor_version=EVALUATOR_VERSION,
+        embedding_model_revision="not_available",
+        nli_or_judge_model_revision="not_available",
+    )
+    manifest["model_base_alias"] = args.model_base_alias
+    manifest["model_tuned_alias"] = args.model_tuned_alias
+    manifest["score_mode"] = "disabled" if args.disable_token_kl else args.score_mode
+    validate_run_manifest(manifest)
+
+    result_rows = _build_run_rows(
+        rows=rows,
+        args=args,
+        adapter=adapter,
+        run_id=run_id,
+        seeds=seeds,
+        decoding_params=decoding_params,
+        stop_sequences=stop_sequences,
+    )
+    manifest_path, results_path = _write_run_outputs(
+        output_dir=output_dir,
+        manifest=manifest,
+        rows=result_rows,
+    )
+    print(f"planned_generation_calls={planned_calls}")
+    print(f"written_result_rows={len(result_rows)}")
+    print(f"manifest_path={_display_path(manifest_path)}")
+    print(f"results_path={_display_path(results_path)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Persona drift Sprint 0 harness")
+    parser = argparse.ArgumentParser(description="Persona drift evaluation harness")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate_parser = subparsers.add_parser("validate", help="validate persona JSONL fixtures")
@@ -1885,6 +2348,38 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--model-tuned")
     plan_parser.add_argument("--seeds", nargs="+")
     plan_parser.set_defaults(func=cmd_plan)
+
+    run_parser = subparsers.add_parser("run", help="run a staged mock or explicit adapter smoke")
+    run_parser.add_argument("--persona-path")
+    run_parser.add_argument("--persona-count", type=int)
+    run_parser.add_argument("--variants-per-persona", type=int)
+    run_parser.add_argument("--out")
+    run_parser.add_argument(
+        "--adapter",
+        choices=["mock", "vllm", "openai-compatible"],
+        required=True,
+    )
+    run_parser.add_argument("--base-url")
+    run_parser.add_argument("--api-key-env")
+    run_parser.add_argument("--serving-stack")
+    run_parser.add_argument(
+        "--score-mode",
+        choices=["canonical", "disabled", "diagnostic_only"],
+        default="canonical",
+    )
+    run_parser.add_argument("--disable-token-kl", action="store_true")
+    run_parser.add_argument("--model-base", required=True)
+    run_parser.add_argument("--model-tuned", required=True)
+    run_parser.add_argument("--model-base-alias", default="base")
+    run_parser.add_argument("--model-tuned-alias", default="tuned")
+    run_parser.add_argument("--seeds", nargs="+", required=True)
+    run_parser.add_argument("--temperature", type=float, default=0.0)
+    run_parser.add_argument("--max-tokens", type=int, default=140)
+    run_parser.add_argument("--prompt-template-version", default=PROMPT_TEMPLATE_VERSION)
+    run_parser.add_argument("--run-id")
+    run_parser.add_argument("--dry-run", action="store_true")
+    run_parser.add_argument("--limit-personas", type=int)
+    run_parser.set_defaults(func=cmd_run)
 
     return parser
 

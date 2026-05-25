@@ -249,7 +249,7 @@
         },
         "model_alias": {
           "type": "string",
-          "enum": ["base", "tuned"]
+          "minLength": 1
         },
         "model_id": {
           "type": "string",
