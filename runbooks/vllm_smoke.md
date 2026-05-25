@@ -28,6 +28,7 @@ planned_generation_calls=240
 - Base and tuned model revisions or hashes are recorded.
 - Tokenizer name/path and tokenizer hash are recorded.
 - Chat-template hash is recorded.
+- The base-model endpoint has an explicit chat-template policy for `/chat/completions`.
 - vLLM version and GPU/CUDA/driver summary are recorded.
 
 Hosted APIs are out of scope unless the user explicitly approves them.
@@ -116,6 +117,7 @@ Stop before real execution if:
 - Promotion manifest evidence is missing.
 - Any explicit runtime metadata is unavailable.
 - The endpoint is not local or not explicitly approved.
+- The base model endpoint cannot safely serve `/chat/completions` with a recorded chat-template policy.
 - The requested persona limit is above 20.
 - Raw request/response logging would be disabled.
 - The code attempts to report canonical Token-KL without proven aligned scoring.

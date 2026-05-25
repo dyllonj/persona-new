@@ -65,6 +65,11 @@ RUN_EVIDENCE_REQUIRED_ARTIFACT_FIELDS = (
     "results_path",
     "aggregate_report_path",
 )
+RUN_EVIDENCE_ARTIFACT_HASH_FIELDS = {
+    "manifest_path": "manifest_hash",
+    "results_path": "results_hash",
+    "aggregate_report_path": "aggregate_report_hash",
+}
 DEV_RUN_APPROVAL_TYPES = {"dev_run_approval", "dev_run_override"}
 FULL_REVIEW_GATE_FIELDS = (
     "semantic_equivalence_status",
@@ -1522,6 +1527,15 @@ def create_run_manifest(
         "model_tuned_revision_or_hash": model_tuned_revision_or_hash,
         "adapter": adapter,
         "provider_or_endpoint": provider_or_endpoint,
+        "runtime_metadata_policy": {
+            "tokenizer_name": "shared_cli_value",
+            "tokenizer_hash": "shared_cli_value",
+            "chat_template_hash": "shared_cli_value",
+            "note": (
+                "Current run CLI records tokenizer/chat-template metadata as shared values. "
+                "Use a separate model-matrix/runtime contract before treating them as independently verified per endpoint."
+            ),
+        },
         "model_endpoints": {
             "base": {
                 "model_id": model_base,
@@ -2322,6 +2336,15 @@ def validate_run_evidence_file(
         declared_path = _resolve_declared_path(raw_value, base_path=evidence_path)
         if not declared_path.exists():
             raise PersonaValidationError(f"{label}.{field} does not exist: {declared_path}")
+        hash_field = RUN_EVIDENCE_ARTIFACT_HASH_FIELDS[field]
+        expected_hash = payload.get(hash_field)
+        if not isinstance(expected_hash, str) or not expected_hash.strip():
+            raise PersonaValidationError(f"{label}.{hash_field} is required")
+        actual_hash = hash_file_bytes(declared_path)
+        if expected_hash != actual_hash:
+            raise PersonaValidationError(
+                f"{label}.{hash_field} does not match {field}: expected {expected_hash}, got {actual_hash}"
+            )
     return payload
 
 

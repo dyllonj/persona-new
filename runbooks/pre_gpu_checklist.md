@@ -58,6 +58,7 @@ Collect these values before any real smoke command:
 - `tokenizer_name`: tokenizer path/name actually loaded by the serving stack.
 - `tokenizer_hash`: deterministic hash of the tokenizer artifact actually loaded.
 - `chat_template_hash`: deterministic hash of the chat template used to render prompts.
+- `base_chat_template_policy`: proof that the base model endpoint can safely serve `/chat/completions`, either through an explicit vLLM chat template or an approved completions-mode transport.
 - `serving_stack`: `vllm`.
 - `serving_stack_version`: exact vLLM version.
 - `gpu_cuda_driver`: GPU model, CUDA version, driver version, and visible device count.
@@ -129,6 +130,7 @@ Stop before the smoke run if:
 - `reviews/personas.full.review.jsonl` is missing or mismatched.
 - The endpoint is hosted, remote, or not explicitly approved for this run.
 - The endpoint is not OpenAI-compatible.
+- The base model endpoint has no explicit chat-template policy for `/chat/completions`.
 - The production/open model matrix does not validate, or a matrix intended for
   execution still has placeholder endpoints or revision hashes.
 - The run command exceeds 20 personas, 6 variants, 2 models, or 1 seed.

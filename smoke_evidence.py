@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 import aggregate
 from persona_eval import (
@@ -18,6 +19,7 @@ from persona_eval import (
     SMOKE_RUN_PERSONA_COUNT,
     SMOKE_RUN_SEED_COUNT,
     PersonaValidationError,
+    REAL_HTTP_ADAPTERS,
     expected_call_count,
     hash_file_bytes,
     utc_now,
@@ -30,6 +32,19 @@ DEFAULT_MANIFEST_PATH = REPO_ROOT / "results" / "vllm_smoke_20" / "manifest.json
 DEFAULT_RESULTS_PATH = REPO_ROOT / "results" / "vllm_smoke_20" / "results.jsonl"
 DEFAULT_AGGREGATE_REPORT_PATH = REPO_ROOT / "reports" / "vllm_smoke_20" / "aggregate_report.json"
 DEFAULT_OUT_PATH = REPO_ROOT / "reports" / "vllm_smoke_20" / "smoke_evidence.json"
+REQUIRED_RUNTIME_METADATA_FIELDS = (
+    "model_base",
+    "model_tuned",
+    "model_base_revision_or_hash",
+    "model_tuned_revision_or_hash",
+    "tokenizer_name",
+    "tokenizer_hash",
+    "chat_template_hash",
+    "serving_stack_version",
+    "gpu_cuda_driver",
+)
+LOCAL_ENDPOINT_HOSTS = {"localhost", "127.0.0.1", "::1"}
+PLACEHOLDER_MARKERS = ("<", ">", "fill-from", "placeholder")
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -54,6 +69,128 @@ def load_json_object(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise PersonaValidationError(f"{label} must be a JSON object")
     return payload
+
+
+def is_placeholder(value: Any) -> bool:
+    if not isinstance(value, str):
+        return True
+    stripped = value.strip()
+    lowered = stripped.lower()
+    return (
+        not stripped
+        or lowered in {"not_available", "todo", "tbd", "placeholder", "unknown"}
+        or any(marker in lowered for marker in PLACEHOLDER_MARKERS)
+    )
+
+
+def require_non_placeholder(payload: dict[str, Any], field: str, label: str) -> None:
+    if is_placeholder(payload.get(field)):
+        raise PersonaValidationError(f"{label}.{field} must be filled with non-placeholder runtime metadata")
+
+
+def require_current_hash(*, payload: dict[str, Any], path_field: str, hash_field: str, label: str) -> Path:
+    raw_path = payload.get(path_field)
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise PersonaValidationError(f"{label}.{path_field} is required")
+    resolved = resolve_path(raw_path)
+    if not resolved.exists():
+        raise PersonaValidationError(f"{label}.{path_field} does not exist: {resolved}")
+    expected_hash = payload.get(hash_field)
+    if not isinstance(expected_hash, str) or not expected_hash.strip():
+        raise PersonaValidationError(f"{label}.{hash_field} is required")
+    actual_hash = hash_file_bytes(resolved)
+    if expected_hash != actual_hash:
+        raise PersonaValidationError(
+            f"{label}.{hash_field} does not match {path_field}: expected {expected_hash}, got {actual_hash}"
+        )
+    return resolved
+
+
+def is_local_endpoint(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = parsed.hostname
+    return host in LOCAL_ENDPOINT_HOSTS
+
+
+def validate_real_smoke_manifest(manifest: dict[str, Any]) -> None:
+    adapter = manifest.get("adapter")
+    if adapter not in REAL_HTTP_ADAPTERS:
+        raise PersonaValidationError("smoke evidence requires a real vllm/openai-compatible adapter")
+    if manifest.get("serving_stack") != "vllm":
+        raise PersonaValidationError("smoke evidence requires serving_stack=vllm")
+    if manifest.get("score_mode") != "disabled":
+        raise PersonaValidationError("Sprint 8 smoke evidence requires score_mode=disabled")
+    if manifest.get("raw_request_response_logging_status") != "enabled":
+        raise PersonaValidationError("smoke evidence requires raw_request_response_logging_status=enabled")
+    logging = manifest.get("raw_request_response_logging")
+    if not isinstance(logging, dict) or not logging.get("raw_request_logged") or not logging.get("raw_response_logged"):
+        raise PersonaValidationError("smoke evidence requires raw request and raw response logging")
+    for field in REQUIRED_RUNTIME_METADATA_FIELDS:
+        require_non_placeholder(manifest, field, "smoke manifest")
+
+    expected_persona_path = (REPO_ROOT / "data" / "personas.full.jsonl").resolve()
+    actual_persona_path = Path(str(manifest.get("persona_path", ""))).resolve()
+    if actual_persona_path != expected_persona_path:
+        raise PersonaValidationError("smoke evidence requires persona_path=data/personas.full.jsonl")
+
+    require_current_hash(
+        payload=manifest,
+        path_field="promotion_manifest_path",
+        hash_field="promotion_manifest_hash",
+        label="smoke manifest",
+    )
+
+    model_endpoints = manifest.get("model_endpoints")
+    if not isinstance(model_endpoints, dict):
+        raise PersonaValidationError("smoke manifest.model_endpoints is required")
+    for side in ("base", "tuned"):
+        endpoint = model_endpoints.get(side)
+        if not isinstance(endpoint, dict):
+            raise PersonaValidationError(f"smoke manifest.model_endpoints.{side} is required")
+        provider = endpoint.get("provider_or_endpoint")
+        if not is_local_endpoint(provider):
+            raise PersonaValidationError(
+                f"smoke manifest.model_endpoints.{side}.provider_or_endpoint must be a local endpoint"
+            )
+        for field in ("model_id", "model_revision_or_hash", "tokenizer_name", "tokenizer_hash", "chat_template_hash"):
+            require_non_placeholder(endpoint, field, f"smoke manifest.model_endpoints.{side}")
+
+
+def validate_result_runtime_metadata(rows: list[dict[str, Any]], manifest: dict[str, Any]) -> None:
+    model_endpoints = manifest.get("model_endpoints")
+    if not isinstance(model_endpoints, dict):
+        raise PersonaValidationError("smoke manifest.model_endpoints is required")
+    expected_endpoints = {
+        side: model_endpoints[side]["provider_or_endpoint"]
+        for side in ("base", "tuned")
+    }
+    expected_adapter = manifest.get("adapter")
+    for index, row in enumerate(rows, start=1):
+        for side in ("base", "tuned"):
+            raw_request = row.get(side, {}).get("raw_request")
+            if not isinstance(raw_request, dict):
+                raise PersonaValidationError(f"result row {index}: {side}.raw_request is required")
+            if raw_request.get("adapter") != expected_adapter:
+                raise PersonaValidationError(f"result row {index}: {side}.raw_request.adapter must match manifest")
+            if raw_request.get("provider_or_endpoint") != expected_endpoints[side]:
+                raise PersonaValidationError(
+                    f"result row {index}: {side}.raw_request.provider_or_endpoint must match manifest endpoint"
+                )
+            endpoint = model_endpoints[side]
+            for field in ("model_id", "model_revision_or_hash", "tokenizer_name", "tokenizer_hash", "chat_template_hash"):
+                if raw_request.get(field) != endpoint.get(field):
+                    raise PersonaValidationError(
+                        f"result row {index}: {side}.raw_request.{field} must match manifest endpoint metadata"
+                    )
+            if not is_local_endpoint(raw_request.get("provider_or_endpoint")):
+                raise PersonaValidationError(f"result row {index}: {side}.raw_request endpoint must be local")
+            metric = row.get("metrics", {}).get("token_kl", {})
+            if isinstance(metric, dict) and metric.get("status") == "ok":
+                raise PersonaValidationError("Sprint 8 smoke evidence must not include canonical Token-KL rows")
 
 
 def validate_smoke_shape(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -161,6 +298,8 @@ def build_smoke_evidence(
     aggregate.assert_manifest_matches_rows(manifest, rows)
     aggregate_report = load_json_object(aggregate_report_path, "aggregate report")
     shape = validate_smoke_shape(rows)
+    validate_real_smoke_manifest(manifest)
+    validate_result_runtime_metadata(rows, manifest)
     validate_aggregate_binding(
         aggregate_report=aggregate_report,
         manifest_path=manifest_path,
@@ -187,10 +326,15 @@ def build_smoke_evidence(
         "model_base": manifest.get("model_base"),
         "model_tuned": manifest.get("model_tuned"),
         "model_endpoints": manifest.get("model_endpoints"),
+        "runtime_metadata_policy": manifest.get("runtime_metadata_policy"),
+        "gpu_cuda_driver": manifest.get("gpu_cuda_driver"),
+        "score_mode": manifest.get("score_mode"),
+        "promotion_manifest_path": manifest.get("promotion_manifest_path"),
+        "promotion_manifest_hash": manifest.get("promotion_manifest_hash"),
         "aggregate_report_status": "valid",
         "validation_notes": [
-            "Validated manifest schema, result-row schema, aggregate report schema, and smoke run shape.",
-            "Evidence proves artifact completeness only; it does not rerun vLLM or judge model quality.",
+            "Validated manifest schema, result-row schema, aggregate report schema, smoke run shape, and real-runtime metadata.",
+            "Evidence proves artifact completeness and runtime metadata binding only; it does not rerun vLLM or judge model quality.",
         ],
     }
 
