@@ -17,7 +17,6 @@ from persona_eval import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_PATH = ROOT / "data" / "personas.sample.jsonl"
-CURRENT_BAD_POOL_PATH = ROOT / "candidates" / "sample_candidates.jsonl"
 
 
 def _unique_words(index, count):
@@ -89,6 +88,24 @@ def _review_for(persona_id, *, status="approved", concerns=None):
 
 def _write_jsonl(path, rows):
     path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
+def _near_duplicate_bad_pool(sample_rows):
+    rows = []
+    for index in range(300):
+        row = copy.deepcopy(sample_rows[index % len(sample_rows)])
+        persona_id = f"bad_{index + 1:04d}"
+        marker = f"Scenario marker {index + 1:04d}."
+        row["persona_id"] = persona_id
+        row["source"]["source_persona_id"] = f"{persona_id}_source"
+        row["seed_prompt"]["prompt_id"] = f"{persona_id}_seed"
+        row["seed_prompt"]["text"] = f"{row['seed_prompt']['text']} {marker}"
+        for variant_index, variant in enumerate(row["variants"]):
+            variant["variant_id"] = f"{persona_id}_v{variant_index}"
+            variant["text"] = f"{variant['text']} {marker}"
+        validate_persona_row(row)
+        rows.append(row)
+    return rows
 
 
 class DatasetPromotionTests(unittest.TestCase):
@@ -195,14 +212,16 @@ class DatasetPromotionTests(unittest.TestCase):
         self.assertFalse(out_path.exists())
         self.assertFalse(report["write_permitted"])
 
-    def test_current_bad_pool_dry_run_blocks_with_exact_reasons(self):
+    def test_near_duplicate_bad_pool_dry_run_blocks_with_exact_reasons(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            candidate_path = root / "bad_candidates.jsonl"
             missing_review_path = root / "personas.full.review.jsonl"
             out_path = root / "personas.full.jsonl"
+            _write_jsonl(candidate_path, _near_duplicate_bad_pool(self.sample_rows))
 
             report, _ = dataset_promotion.evaluate_promotion(
-                candidate_path=CURRENT_BAD_POOL_PATH,
+                candidate_path=candidate_path,
                 review_path=missing_review_path,
                 out_path=out_path,
                 dry_run=True,
@@ -227,7 +246,7 @@ class DatasetPromotionTests(unittest.TestCase):
             reasons["duplicate_candidate_blocked"]["detail"],
             (
                 "Deterministic near-duplicate scan found 4,350 candidate pairs at or above threshold 0.92; "
-                "first observed pair candidate_0001/candidate_0011 similarity=0.990."
+                "first observed pair bad_0001/bad_0011 similarity=0.990."
             ),
         )
         self.assertFalse(out_path.exists())
