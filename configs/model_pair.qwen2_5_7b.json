@@ -1,0 +1,40 @@
+{
+  "config_type": "model_pair",
+  "config_version": "sprint8a_pre_gpu",
+  "name": "qwen2_5_7b_base_vs_instruct",
+  "base": {
+    "model_id": "Qwen/Qwen2.5-7B",
+    "revision_or_hash": "<fill-from-gpu-host-before-execution>",
+    "tokenizer_name": "Qwen/Qwen2.5-7B",
+    "tokenizer_hash": "<fill-from-gpu-host-before-execution>",
+    "chat_template_hash": "<fill-from-gpu-host-before-execution>"
+  },
+  "tuned": {
+    "model_id": "Qwen/Qwen2.5-7B-Instruct",
+    "revision_or_hash": "<fill-from-gpu-host-before-execution>",
+    "tokenizer_name": "Qwen/Qwen2.5-7B-Instruct",
+    "tokenizer_hash": "<fill-from-gpu-host-before-execution>",
+    "chat_template_hash": "<fill-from-gpu-host-before-execution>"
+  },
+  "compatibility_requirements": {
+    "tokenizer_hash_must_match_for_canonical_token_kl": true,
+    "chat_template_hash_must_be_recorded_for_every_run": true,
+    "model_revisions_must_be_immutable_hashes_or_explicit_hf_revisions": true
+  },
+  "serving_policy": {
+    "default_stack": "vllm",
+    "allowed_endpoint_modes": [
+      "shared_openai_compatible_endpoint",
+      "separate_base_and_tuned_openai_compatible_endpoints"
+    ],
+    "hosted_apis_allowed_by_default": false,
+    "run_real_models_from_this_workstation": false,
+    "execute_with_placeholder_hashes": false
+  },
+  "notes": [
+    "This file pins the intended model IDs for Sprint 8A pre-GPU preparation only.",
+    "revision_or_hash, tokenizer_hash, and chat_template_hash are placeholders until collected on the GPU host.",
+    "Do not start smoke, dev, or full execution until every placeholder is replaced in the run command or approval artifact.",
+    "Canonical Token-KL remains unavailable unless the GPU scoring path proves tokenizer, vocabulary, prompt rendering, and chat-template alignment."
+  ]
+}

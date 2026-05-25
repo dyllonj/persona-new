@@ -132,6 +132,7 @@ class ManifestAndResultTests(unittest.TestCase):
             "model_tuned_revision_or_hash",
             "adapter",
             "provider_or_endpoint",
+            "model_endpoints",
             "serving_stack",
             "serving_stack_version",
             "scoring_capability",
@@ -159,9 +160,37 @@ class ManifestAndResultTests(unittest.TestCase):
         self.assertIsNone(manifest["review_manifest_hash"])
         self.assertIsNone(manifest["promotion_manifest_path"])
         self.assertIsNone(manifest["promotion_manifest_hash"])
+        self.assertEqual(manifest["model_endpoints"]["base"]["provider_or_endpoint"], "local_mock")
+        self.assertEqual(manifest["model_endpoints"]["tuned"]["provider_or_endpoint"], "local_mock")
         self.assertEqual(manifest["raw_request_response_logging_status"], "enabled")
         self.assertTrue(manifest["raw_request_response_logging"]["raw_request_logged"])
         self.assertTrue(manifest["raw_request_response_logging"]["raw_response_logged"])
+        validate_run_manifest(manifest)
+
+    def test_manifest_records_distinct_model_endpoints(self):
+        manifest = create_run_manifest(
+            persona_path=SAMPLE_PATH,
+            model_base="base",
+            model_tuned="tuned",
+            seeds=[1],
+            run_id="test-run",
+            timestamp_utc="2026-05-25T00:00:00Z",
+            code_commit="test-commit",
+            dirty_worktree=True,
+            provider_or_endpoint="model_specific_endpoints",
+            provider_or_endpoint_base="http://base.localhost:8001/v1",
+            provider_or_endpoint_tuned="http://tuned.localhost:8002/v1",
+        )
+
+        self.assertEqual(manifest["provider_or_endpoint"], "model_specific_endpoints")
+        self.assertEqual(
+            manifest["model_endpoints"]["base"]["provider_or_endpoint"],
+            "http://base.localhost:8001/v1",
+        )
+        self.assertEqual(
+            manifest["model_endpoints"]["tuned"]["provider_or_endpoint"],
+            "http://tuned.localhost:8002/v1",
+        )
         validate_run_manifest(manifest)
 
     def test_manifest_records_promotion_manifest_hash_when_provided(self):

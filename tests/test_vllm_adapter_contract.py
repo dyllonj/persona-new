@@ -1,3 +1,4 @@
+import argparse
 import json
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from unittest import mock
 
 from persona_eval import (
     VLLMOpenAIAdapter,
+    _adapters_from_args,
     build_generation_request,
     build_score_continuation_request,
     load_jsonl,
@@ -164,6 +166,60 @@ class VLLMAdapterContractTests(unittest.TestCase):
         self.assertEqual(status["fixed_continuation_hash"], sha256_text("fixed continuation"))
         self.assertEqual(status["k"], 50)
         self.assertFalse(status["diagnostic_only"])
+
+    def test_distinct_endpoint_args_are_recorded_in_raw_requests_without_network(self):
+        args = argparse.Namespace(
+            adapter="vllm",
+            base_url=None,
+            base_url_base="http://localhost:8001/v1",
+            base_url_tuned="http://localhost:8002/v1",
+            api_key_env=None,
+            serving_stack=None,
+            serving_stack_version="vllm-fixture",
+        )
+
+        adapters = _adapters_from_args(args)
+        base_request = build_generation_request(
+            rendered=self.rendered,
+            run_id="vllm-contract",
+            persona_id=self.row["persona_id"],
+            variant_id=self.variant["variant_id"],
+            variant_type=self.variant["type"],
+            model_alias="base",
+            model_id="Qwen/Qwen2.5-7B",
+            seed=1,
+            adapter=adapters.base,
+        )
+        tuned_request = build_generation_request(
+            rendered=self.rendered,
+            run_id="vllm-contract",
+            persona_id=self.row["persona_id"],
+            variant_id=self.variant["variant_id"],
+            variant_type=self.variant["type"],
+            model_alias="tuned",
+            model_id="Qwen/Qwen2.5-7B-Instruct",
+            seed=1,
+            adapter=adapters.tuned,
+        )
+
+        self.assertEqual(base_request.to_raw_request()["provider_or_endpoint"], "http://localhost:8001/v1")
+        self.assertEqual(tuned_request.to_raw_request()["provider_or_endpoint"], "http://localhost:8002/v1")
+
+    def test_shared_base_url_remains_backward_compatible(self):
+        args = argparse.Namespace(
+            adapter="vllm",
+            base_url="http://localhost:8000/v1",
+            base_url_base=None,
+            base_url_tuned=None,
+            api_key_env=None,
+            serving_stack=None,
+            serving_stack_version="vllm-fixture",
+        )
+
+        adapters = _adapters_from_args(args)
+
+        self.assertEqual(adapters.base.provider_or_endpoint, "http://localhost:8000/v1")
+        self.assertEqual(adapters.tuned.provider_or_endpoint, "http://localhost:8000/v1")
 
     def test_vllm_dry_run_refuses_more_than_twenty_personas(self):
         completed = subprocess.run(

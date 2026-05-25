@@ -22,6 +22,7 @@
     "model_tuned_revision_or_hash",
     "adapter",
     "provider_or_endpoint",
+    "model_endpoints",
     "serving_stack",
     "serving_stack_version",
     "scoring_capability",
@@ -107,6 +108,19 @@
       "type": "string",
       "minLength": 1
     },
+    "model_endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "tuned"],
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/model_endpoint"
+        },
+        "tuned": {
+          "$ref": "#/$defs/model_endpoint"
+        }
+      }
+    },
     "serving_stack": {
       "type": "string",
       "minLength": 1
@@ -190,6 +204,46 @@
           "type": "boolean"
         },
         "storage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "model_endpoint": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "model_id",
+        "model_revision_or_hash",
+        "provider_or_endpoint",
+        "tokenizer_name",
+        "tokenizer_hash",
+        "chat_template_hash"
+      ],
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_revision_or_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_or_endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tokenizer_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tokenizer_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chat_template_hash": {
           "type": "string",
           "minLength": 1
         }

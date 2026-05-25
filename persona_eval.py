@@ -379,6 +379,14 @@ class BaseAdapter(ABC):
         """Score a fixed continuation, or return a structured unavailable status."""
 
 
+@dataclass(frozen=True)
+class AdapterPair:
+    """Generation adapters for the base and tuned model calls in one run."""
+
+    base: BaseAdapter
+    tuned: BaseAdapter
+
+
 class MockAdapter(BaseAdapter):
     """Deterministic local adapter for Sprint 1 tests and mock runs."""
 
@@ -1439,6 +1447,8 @@ def create_run_manifest(
     model_tuned_revision_or_hash: str = "not_available",
     adapter: str = "mock",
     provider_or_endpoint: str = "local_mock",
+    provider_or_endpoint_base: str | None = None,
+    provider_or_endpoint_tuned: str | None = None,
     serving_stack: str = "mock",
     serving_stack_version: str = "sprint1",
     scoring_capability: str = "none",
@@ -1457,6 +1467,8 @@ def create_run_manifest(
     persona_path_obj = Path(persona_path)
     promotion_path = Path(promotion_manifest_path) if promotion_manifest_path else None
     review_path = Path(review_manifest_path) if review_manifest_path else None
+    base_endpoint = provider_or_endpoint_base or provider_or_endpoint
+    tuned_endpoint = provider_or_endpoint_tuned or provider_or_endpoint
     manifest = {
         "run_id": run_id or f"run-{utc_now()}",
         "timestamp_utc": timestamp_utc or utc_now(),
@@ -1475,6 +1487,24 @@ def create_run_manifest(
         "model_tuned_revision_or_hash": model_tuned_revision_or_hash,
         "adapter": adapter,
         "provider_or_endpoint": provider_or_endpoint,
+        "model_endpoints": {
+            "base": {
+                "model_id": model_base,
+                "model_revision_or_hash": model_base_revision_or_hash,
+                "provider_or_endpoint": base_endpoint,
+                "tokenizer_name": tokenizer_name,
+                "tokenizer_hash": tokenizer_hash,
+                "chat_template_hash": chat_template_hash,
+            },
+            "tuned": {
+                "model_id": model_tuned,
+                "model_revision_or_hash": model_tuned_revision_or_hash,
+                "provider_or_endpoint": tuned_endpoint,
+                "tokenizer_name": tokenizer_name,
+                "tokenizer_hash": tokenizer_hash,
+                "chat_template_hash": chat_template_hash,
+            },
+        },
         "serving_stack": serving_stack,
         "serving_stack_version": serving_stack_version,
         "scoring_capability": scoring_capability,
@@ -2628,21 +2658,61 @@ def _decoding_params_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _adapter_from_args(args: argparse.Namespace) -> BaseAdapter:
+def _non_empty_arg(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _real_adapter_base_urls(args: argparse.Namespace) -> tuple[str, str]:
+    shared = _non_empty_arg(getattr(args, "base_url", None))
+    base_url = _non_empty_arg(getattr(args, "base_url_base", None)) or shared
+    tuned_url = _non_empty_arg(getattr(args, "base_url_tuned", None)) or shared
+    if base_url and tuned_url:
+        return base_url, tuned_url
+    raise PersonaValidationError(
+        "vllm/openai-compatible adapters require --base-url as a shared endpoint "
+        "or both --base-url-base and --base-url-tuned"
+    )
+
+
+def _http_adapter_from_args(args: argparse.Namespace, *, base_url: str) -> VLLMOpenAIAdapter:
+    serving_stack = args.serving_stack
+    if serving_stack is None:
+        serving_stack = "vllm" if args.adapter == "vllm" else "openai_compatible"
+    return VLLMOpenAIAdapter(
+        base_url=base_url,
+        adapter_name=args.adapter,
+        api_key_env=args.api_key_env,
+        serving_stack=serving_stack,
+        serving_stack_version=args.serving_stack_version or "not_available",
+    )
+
+
+def _adapters_from_args(args: argparse.Namespace) -> AdapterPair:
     if args.adapter == "mock":
-        return MockAdapter()
+        adapter = MockAdapter()
+        return AdapterPair(base=adapter, tuned=adapter)
     if args.adapter in {"vllm", "openai-compatible"}:
-        serving_stack = args.serving_stack
-        if serving_stack is None:
-            serving_stack = "vllm" if args.adapter == "vllm" else "openai_compatible"
-        return VLLMOpenAIAdapter(
-            base_url=args.base_url,
-            adapter_name=args.adapter,
-            api_key_env=args.api_key_env,
-            serving_stack=serving_stack,
-            serving_stack_version=args.serving_stack_version or "not_available",
+        base_url, tuned_url = _real_adapter_base_urls(args)
+        return AdapterPair(
+            base=_http_adapter_from_args(args, base_url=base_url),
+            tuned=_http_adapter_from_args(args, base_url=tuned_url),
         )
     raise PersonaValidationError(f"unsupported adapter: {args.adapter!r}")
+
+
+def _adapter_from_args(args: argparse.Namespace) -> BaseAdapter:
+    return _adapters_from_args(args).base
+
+
+def _provider_or_endpoint_summary(adapters: AdapterPair) -> str:
+    base_endpoint = adapters.base.provider_or_endpoint
+    tuned_endpoint = adapters.tuned.provider_or_endpoint
+    if base_endpoint == tuned_endpoint:
+        return base_endpoint
+    return "model_specific_endpoints"
 
 
 def _run_output_dir(args: argparse.Namespace) -> Path:
@@ -2732,7 +2802,8 @@ def _build_run_rows(
     *,
     rows: list[dict[str, Any]],
     args: argparse.Namespace,
-    adapter: BaseAdapter,
+    base_adapter: BaseAdapter,
+    tuned_adapter: BaseAdapter,
     run_id: str,
     seeds: list[int],
     decoding_params: dict[str, Any],
@@ -2768,7 +2839,7 @@ def _build_run_rows(
                     seed=seed,
                     decoding_params=decoding_params,
                     stop_sequences=stop_sequences,
-                    adapter=adapter,
+                    adapter=base_adapter,
                 )
                 tuned_request = build_generation_request(
                     rendered=rendered,
@@ -2785,13 +2856,13 @@ def _build_run_rows(
                     seed=seed,
                     decoding_params=decoding_params,
                     stop_sequences=stop_sequences,
-                    adapter=adapter,
+                    adapter=tuned_adapter,
                 )
-                base_result = adapter.generate(base_request)
-                tuned_result = adapter.generate(tuned_request)
+                base_result = base_adapter.generate(base_request)
+                tuned_result = tuned_adapter.generate(tuned_request)
                 score_result = _score_result_for_run(
                     args=args,
-                    adapter=adapter,
+                    adapter=tuned_adapter,
                     rendered=rendered,
                     run_id=run_id,
                     persona_row=persona_row,
@@ -2912,7 +2983,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     seeds = parse_seeds(args.seeds)
     decoding_params = _decoding_params_from_args(args)
     stop_sequences: list[str] = []
-    adapter = _adapter_from_args(args)
+    adapters = _adapters_from_args(args)
     rows, persona_count, variants_per_persona = _run_persona_shape(args)
     planned_calls = expected_call_count(persona_count, variants_per_persona, 2, len(seeds))
 
@@ -2948,11 +3019,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         tokenizer_hash=args.tokenizer_hash,
         model_base_revision_or_hash=args.model_base_revision_or_hash,
         model_tuned_revision_or_hash=args.model_tuned_revision_or_hash,
-        adapter=adapter.adapter_name,
-        provider_or_endpoint=adapter.provider_or_endpoint,
-        serving_stack=adapter.serving_stack,
-        serving_stack_version=adapter.serving_stack_version,
-        scoring_capability=adapter.scoring_capability,
+        adapter=adapters.base.adapter_name,
+        provider_or_endpoint=_provider_or_endpoint_summary(adapters),
+        provider_or_endpoint_base=adapters.base.provider_or_endpoint,
+        provider_or_endpoint_tuned=adapters.tuned.provider_or_endpoint,
+        serving_stack=adapters.base.serving_stack,
+        serving_stack_version=adapters.base.serving_stack_version,
+        scoring_capability=adapters.base.scoring_capability,
         gpu_cuda_driver=args.gpu_cuda_driver,
         decoding_params=decoding_params,
         stop_sequences=stop_sequences,
@@ -2972,7 +3045,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     result_rows = _build_run_rows(
         rows=rows,
         args=args,
-        adapter=adapter,
+        base_adapter=adapters.base,
+        tuned_adapter=adapters.tuned,
         run_id=run_id,
         seeds=seeds,
         decoding_params=decoding_params,
@@ -3052,7 +3126,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["mock", "vllm", "openai-compatible"],
         required=True,
     )
-    run_parser.add_argument("--base-url")
+    run_parser.add_argument("--base-url", help="Shared OpenAI-compatible endpoint for both base and tuned calls")
+    run_parser.add_argument("--base-url-base", help="OpenAI-compatible endpoint for base model calls")
+    run_parser.add_argument("--base-url-tuned", help="OpenAI-compatible endpoint for tuned model calls")
     run_parser.add_argument("--api-key-env")
     run_parser.add_argument("--serving-stack")
     run_parser.add_argument("--serving-stack-version")
