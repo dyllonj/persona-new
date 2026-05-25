@@ -5,11 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from model_matrix import load_model_matrix
 from persona_eval import validate_result_row, validate_run_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_PATH = ROOT / "data" / "personas.sample.jsonl"
+MATRIX_PATH = ROOT / "configs" / "model_matrix.production_open.json"
 
 
 class RunCliTests(unittest.TestCase):
@@ -22,6 +24,23 @@ class RunCliTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+    def write_ready_qwen_matrix(self, path):
+        matrix = load_model_matrix(MATRIX_PATH)
+        matrix["template_status"] = "real_run_ready"
+        matrix["real_run_ready"] = True
+        matrix["drift_pairs"] = [
+            pair for pair in matrix["drift_pairs"] if pair["pair_id"] == "qwen2_5_7b_base_vs_instruct"
+        ]
+        matrix["standalone_instruct_models"] = []
+        matrix["cross_family_comparisons"] = []
+        for model_key in ("base_model", "instruct_model"):
+            model = matrix["drift_pairs"][0][model_key]
+            model["provider_or_endpoint"] = "http://localhost:8000/v1"
+            model["required_revision_or_hash"] = f"{model['model_id']}-revision"
+            model["license_review_status"] = "approved"
+            model["license_review_evidence"] = ["fixture license review approval"]
+        path.write_text(json.dumps(matrix, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     def test_run_dry_run_prints_sample_count_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -319,6 +338,70 @@ class RunCliTests(unittest.TestCase):
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("--base-url is required", completed.stderr)
+
+    def test_model_matrix_cross_family_entry_blocks_canonical_token_kl_before_run(self):
+        completed = self.run_cli(
+            "run",
+            "--persona-count",
+            "20",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "meta-llama/Llama-3.1-8B-Instruct",
+            "--model-tuned",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "--model-matrix",
+            str(MATRIX_PATH),
+            "--model-matrix-entry",
+            "llama3_1_8b_instruct_vs_qwen2_5_7b_instruct",
+            "--seeds",
+            "1",
+            "--dry-run",
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("marks Token-KL not_applicable", completed.stderr)
+
+    def test_model_matrix_policy_is_written_to_result_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            matrix_path = root / "ready-qwen-matrix.json"
+            self.write_ready_qwen_matrix(matrix_path)
+            out = root / "matrix-run"
+
+            completed = self.run_cli(
+                "run",
+                "--persona-path",
+                str(SAMPLE_PATH),
+                "--out",
+                str(out),
+                "--adapter",
+                "mock",
+                "--model-base",
+                "Qwen/Qwen2.5-7B",
+                "--model-tuned",
+                "Qwen/Qwen2.5-7B-Instruct",
+                "--model-matrix",
+                str(matrix_path),
+                "--model-matrix-entry",
+                "qwen2_5_7b_base_vs_instruct",
+                "--seeds",
+                "1",
+                "--limit-personas",
+                "1",
+                "--disable-token-kl",
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["model_matrix_entry"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(manifest["model_matrix_token_kl_applicability"], "canonical_possible")
+            row = json.loads((out / "results.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(row["model_pair"]["model_matrix_entry"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(row["model_pair"]["token_kl_applicability"], "canonical_possible")
+            validate_result_row(row)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,8 @@ planned_generation_calls=240
 - Chat-template hash is recorded.
 - The base-model endpoint has an explicit chat-template policy for `/chat/completions`.
 - vLLM version and GPU/CUDA/driver summary are recorded.
+- If a production/open model matrix entry is used, the matrix is real-run ready,
+  license-reviewed, and passed with `--model-matrix` plus `--model-matrix-entry`.
 
 Hosted APIs are out of scope unless the user explicitly approves them.
 
@@ -47,6 +49,8 @@ python3 persona_eval.py run \
   --base-url http://localhost:8000/v1 \
   --model-base <base-model-id> \
   --model-tuned <tuned-model-id> \
+  --model-matrix <real-run-ready-model-matrix-json> \
+  --model-matrix-entry <matrix-entry-id> \
   --model-base-revision-or-hash <base-model-revision-or-hash> \
   --model-tuned-revision-or-hash <tuned-model-revision-or-hash> \
   --tokenizer-name <tokenizer-name-or-path> \
@@ -118,6 +122,7 @@ Stop before real execution if:
 - Any explicit runtime metadata is unavailable.
 - The endpoint is not local or not explicitly approved.
 - The base model endpoint cannot safely serve `/chat/completions` with a recorded chat-template policy.
+- A selected model matrix entry is not real-run ready, license-reviewed, or compatible with the requested Token-KL score mode.
 - The requested persona limit is above 20.
 - Raw request/response logging would be disabled.
 - The code attempts to report canonical Token-KL without proven aligned scoring.

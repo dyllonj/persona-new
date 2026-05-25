@@ -29,7 +29,14 @@ python3 persona_eval.py validate-model-matrix --matrix-path configs/model_matrix
 
 That command must fail until every `provider_or_endpoint` and
 `required_revision_or_hash` placeholder has been replaced with reproducible
-runtime values.
+runtime values, `template_status` is changed to `real_run_ready`, top-level
+`real_run_ready` is `true`, and every model with `license_review_required: true`
+has explicit `license_review_status: approved` plus non-empty
+`license_review_evidence`.
+
+Template validation is not execution approval. A matrix with filled endpoints
+and revisions still blocks real-run readiness until the top-level ready flags
+and license review evidence are present.
 
 ## Comparison Types
 
@@ -66,11 +73,23 @@ possible in this matrix.
 
 ## Result-Row Guard
 
-If a result row carries `model_pair.token_kl_applicability` or
-`model_pair.metric_applicability.token_kl`, validation rejects
+Runs can bind a selected matrix entry with:
+
+```bash
+--model-matrix configs/model_matrix.production_open.json \
+--model-matrix-entry qwen2_5_7b_base_vs_instruct
+```
+
+When bound, the run manifest records the matrix path, hash, selected entry, and
+Token-KL applicability. Result rows carry the selected policy under
+`model_pair`. Validation rejects
 `metrics.token_kl.status: ok` when the applicability is `not_applicable` or
 `diagnostic_only`. Aggregation uses the same result-row validator, so invalid
 canonical Token-KL cannot enter aggregate summaries through that path.
+
+For entries marked `not_applicable` or `diagnostic_only`, run/preflight rejects
+canonical scoring before execution. Use `--disable-token-kl` for Sprint 8 smoke
+or choose a non-canonical score mode where appropriate.
 
 ## Stop Conditions
 
@@ -79,6 +98,9 @@ Stop before execution if:
 - `validate-model-matrix` fails.
 - `--require-real-run-ready` fails for a run intended to use the matrix.
 - Any model revision/hash is missing or placeholder-shaped.
+- Top-level `template_status` is not `real_run_ready` for an intended real run.
+- Top-level `real_run_ready` is not `true` for an intended real run.
+- Required license review evidence is missing.
 - Any endpoint is missing, hosted unexpectedly, or not approved for the run.
 - A cross-family or standalone comparison attempts canonical Token-KL.
 - A same-family pair lacks aligned fixed-continuation scoring proof.

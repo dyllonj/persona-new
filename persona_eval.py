@@ -21,7 +21,7 @@ from typing import Any
 import urllib.error
 import urllib.request
 
-from model_matrix import load_model_matrix, validate_model_matrix
+from model_matrix import load_model_matrix, resolve_model_matrix_entry, validate_model_matrix
 
 try:
     import jsonschema
@@ -2503,6 +2503,67 @@ def _require_full_runtime_metadata(args: argparse.Namespace) -> None:
         )
 
 
+def _model_matrix_args_present(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "model_matrix", None) or getattr(args, "model_matrix_entry", None))
+
+
+def _score_mode_from_args(args: argparse.Namespace) -> str:
+    return "disabled" if getattr(args, "disable_token_kl", False) else getattr(args, "score_mode", "canonical")
+
+
+def _resolve_model_matrix_policy_for_args(
+    args: argparse.Namespace,
+    *,
+    require_real_run_ready: bool,
+) -> dict[str, Any] | None:
+    if not _model_matrix_args_present(args):
+        return None
+    if not getattr(args, "model_matrix", None):
+        raise PersonaValidationError("--model-matrix is required when --model-matrix-entry is provided")
+    if not getattr(args, "model_matrix_entry", None):
+        raise PersonaValidationError("--model-matrix-entry is required when --model-matrix is provided")
+
+    matrix_path = Path(args.model_matrix)
+    matrix = load_model_matrix(matrix_path)
+    report = validate_model_matrix(matrix, require_real_run_ready=require_real_run_ready)
+    policy = resolve_model_matrix_entry(matrix, args.model_matrix_entry)
+    policy["matrix_path"] = str(matrix_path)
+    policy["matrix_hash"] = hash_file_bytes(matrix_path)
+    policy["matrix_status"] = report["status"]
+    policy["matrix_real_run_ready"] = report["real_run_ready"]
+    return policy
+
+
+def _enforce_model_matrix_token_kl_policy(args: argparse.Namespace, policy: dict[str, Any] | None) -> None:
+    if policy is None:
+        return
+    model_ids = policy.get("model_ids") if isinstance(policy.get("model_ids"), dict) else {}
+    if policy.get("entry_type") == "drift_pair":
+        if args.model_base != model_ids.get("base") or args.model_tuned != model_ids.get("tuned"):
+            raise PersonaValidationError(
+                "model matrix drift-pair entry does not match --model-base/--model-tuned"
+            )
+    if policy.get("entry_type") == "cross_family_comparison":
+        if args.model_base != model_ids.get("left") or args.model_tuned != model_ids.get("right"):
+            raise PersonaValidationError(
+                "model matrix cross-family entry does not match --model-base/--model-tuned"
+            )
+    if policy.get("entry_type") == "standalone_instruct_model":
+        standalone_id = model_ids.get("standalone")
+        if standalone_id not in {args.model_base, args.model_tuned}:
+            raise PersonaValidationError(
+                "model matrix standalone entry must match --model-base or --model-tuned"
+            )
+    score_mode = _score_mode_from_args(args)
+    applicability = policy.get("token_kl_applicability")
+    if applicability != "canonical_possible" and score_mode == "canonical":
+        raise PersonaValidationError(
+            "model matrix entry "
+            f"{policy.get('entry_id')} marks Token-KL {applicability}; use --disable-token-kl "
+            "or a non-canonical score mode"
+        )
+
+
 def _preflight_shape(args: argparse.Namespace) -> tuple[list[dict[str, Any]] | None, int, int]:
     if args.persona_path:
         rows = validate_personas(args.persona_path)
@@ -2553,6 +2614,8 @@ def validate_dev_preflight(
         expected_call_count_value=SMOKE_RUN_CALL_COUNT,
     )
     validate_dev_run_approval(dev_run_approval, persona_path=args.persona_path)
+    matrix_policy = _resolve_model_matrix_policy_for_args(args, require_real_run_ready=True)
+    _enforce_model_matrix_token_kl_policy(args, matrix_policy)
     return planned_calls
 
 
@@ -2599,6 +2662,8 @@ def validate_full_preflight(
     )
     validate_full_run_approval(args.full_run_approval, persona_path=args.persona_path)
     _require_full_runtime_metadata(args)
+    matrix_policy = _resolve_model_matrix_policy_for_args(args, require_real_run_ready=True)
+    _enforce_model_matrix_token_kl_policy(args, matrix_policy)
     return planned_calls
 
 
@@ -2874,6 +2939,13 @@ def _build_run_rows(
         "base_alias": args.model_base_alias,
         "tuned_alias": args.model_tuned_alias,
     }
+    matrix_policy = getattr(args, "model_matrix_policy", None)
+    if matrix_policy is not None:
+        model_pair["model_matrix_entry"] = matrix_policy.get("entry_id")
+        model_pair["model_matrix_entry_type"] = matrix_policy.get("entry_type")
+        model_pair["token_kl_applicability"] = matrix_policy.get("token_kl_applicability")
+        model_pair["token_kl_reason_code"] = matrix_policy.get("token_kl_reason_code")
+        model_pair["metric_applicability"] = matrix_policy.get("metric_applicability")
     for persona_row in rows:
         for variant in persona_row["variants"]:
             rendered = render_prompt(
@@ -3045,6 +3117,7 @@ def cmd_validate_model_matrix(args: argparse.Namespace) -> int:
     print(f"model_matrix_status={report['status']}")
     print(f"real_run_readiness={'ready' if report['real_run_ready'] else 'blocked'}")
     print(f"placeholder_count={report['placeholder_count']}")
+    print(f"license_review_blocker_count={report['license_review_blocker_count']}")
     print(f"drift_pairs={report['drift_pair_count']}")
     print(f"standalone_instruct_models={report['standalone_instruct_model_count']}")
     print(f"cross_family_comparisons={report['cross_family_comparison_count']}")
@@ -3056,6 +3129,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     seeds = parse_seeds(args.seeds)
     decoding_params = _decoding_params_from_args(args)
     stop_sequences: list[str] = []
+    matrix_policy = _resolve_model_matrix_policy_for_args(args, require_real_run_ready=not args.dry_run)
+    _enforce_model_matrix_token_kl_policy(args, matrix_policy)
+    args.model_matrix_policy = matrix_policy
     adapters = _adapters_from_args(args)
     rows, persona_count, variants_per_persona = _run_persona_shape(args)
     planned_calls = expected_call_count(persona_count, variants_per_persona, 2, len(seeds))
@@ -3113,6 +3189,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["model_base_alias"] = args.model_base_alias
     manifest["model_tuned_alias"] = args.model_tuned_alias
     manifest["score_mode"] = "disabled" if args.disable_token_kl else args.score_mode
+    if matrix_policy is not None:
+        manifest["model_matrix_path"] = matrix_policy.get("matrix_path")
+        manifest["model_matrix_hash"] = matrix_policy.get("matrix_hash")
+        manifest["model_matrix_entry"] = matrix_policy.get("entry_id")
+        manifest["model_matrix_entry_type"] = matrix_policy.get("entry_type")
+        manifest["model_matrix_token_kl_applicability"] = matrix_policy.get("token_kl_applicability")
+        manifest["model_matrix_token_kl_reason_code"] = matrix_policy.get("token_kl_reason_code")
     validate_run_manifest(manifest)
 
     result_rows = _build_run_rows(
@@ -3181,6 +3264,14 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--tokenizer-hash", default="not_available")
     preflight_parser.add_argument("--chat-template-hash", default="not_available")
     preflight_parser.add_argument("--serving-stack-version", default="not_available")
+    preflight_parser.add_argument("--model-matrix")
+    preflight_parser.add_argument("--model-matrix-entry")
+    preflight_parser.add_argument(
+        "--score-mode",
+        choices=["canonical", "disabled", "diagnostic_only"],
+        default="canonical",
+    )
+    preflight_parser.add_argument("--disable-token-kl", action="store_true")
     preflight_parser.set_defaults(func=cmd_preflight)
 
     matrix_parser = subparsers.add_parser(
@@ -3229,6 +3320,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--model-tuned-revision-or-hash", default="not_available")
     run_parser.add_argument("--model-base-alias", default="base")
     run_parser.add_argument("--model-tuned-alias", default="tuned")
+    run_parser.add_argument("--model-matrix")
+    run_parser.add_argument("--model-matrix-entry")
     run_parser.add_argument("--tokenizer-name", default="not_available")
     run_parser.add_argument("--tokenizer-hash", default="not_available")
     run_parser.add_argument("--chat-template-hash", default="not_available")

@@ -63,6 +63,8 @@ Collect these values before any real smoke command:
 - `serving_stack_version`: exact vLLM version.
 - `gpu_cuda_driver`: GPU model, CUDA version, driver version, and visible device count.
 - `base_url`: shared local OpenAI-compatible endpoint, or both `base_url_base` and `base_url_tuned`.
+- `model_matrix_entry`: selected production/open matrix entry, if a run is bound to the matrix.
+- `license_review_status` and `license_review_evidence`: completed evidence for every matrix model with `license_review_required: true`.
 - `decoding_params`: temperature `0.0`, max tokens `140`.
 - `seeds`: smoke `1`; dev/full `1,2`.
 - `raw_request_response_logging_status`: must be `enabled`.
@@ -94,6 +96,8 @@ python3 persona_eval.py run \
   --base-url <local-vllm-openai-compatible-endpoint> \
   --model-base Qwen/Qwen2.5-7B \
   --model-tuned Qwen/Qwen2.5-7B-Instruct \
+  --model-matrix <real-run-ready-model-matrix-json> \
+  --model-matrix-entry qwen2_5_7b_base_vs_instruct \
   --model-base-revision-or-hash <base-revision-or-hash> \
   --model-tuned-revision-or-hash <tuned-revision-or-hash> \
   --tokenizer-name <tokenizer-name-or-path> \
@@ -133,6 +137,8 @@ Stop before the smoke run if:
 - The base model endpoint has no explicit chat-template policy for `/chat/completions`.
 - The production/open model matrix does not validate, or a matrix intended for
   execution still has placeholder endpoints or revision hashes.
+- A matrix intended for execution is not marked `template_status: real_run_ready`
+  with top-level `real_run_ready: true` and completed license review evidence.
 - The run command exceeds 20 personas, 6 variants, 2 models, or 1 seed.
 - Raw request/response logging would be disabled.
 - The command omits model revision/hash, tokenizer hash, chat-template hash, vLLM version, or GPU/CUDA/driver metadata.

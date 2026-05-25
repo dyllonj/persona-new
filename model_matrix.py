@@ -41,6 +41,7 @@ MODEL_RUNTIME_PLACEHOLDER_FIELDS = (
     "provider_or_endpoint",
     "required_revision_or_hash",
 )
+PASSING_LICENSE_REVIEW_STATUSES = {"approved", "not_required"}
 SAME_FAMILY_ALIGNMENT_REQUIREMENTS = (
     "same_tokenizer_family_required",
     "same_vocabulary_required",
@@ -194,6 +195,70 @@ def _runtime_placeholder_paths(matrix: dict[str, Any]) -> list[str]:
     return sorted(placeholders)
 
 
+def _license_review_blocking_paths(matrix: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    for path, model in _model_entries(matrix):
+        if model.get("license_review_required") is not True:
+            continue
+        status = model.get("license_review_status")
+        evidence = model.get("license_review_evidence")
+        if status not in PASSING_LICENSE_REVIEW_STATUSES:
+            blockers.append(f"{path}.license_review_status")
+            continue
+        if status == "approved" and (
+            not isinstance(evidence, list) or not any(isinstance(item, str) and item.strip() for item in evidence)
+        ):
+            blockers.append(f"{path}.license_review_evidence")
+    return sorted(blockers)
+
+
+def resolve_model_matrix_entry(matrix: dict[str, Any], entry_id: str) -> dict[str, Any]:
+    """Resolve a matrix entry into the runtime policy stored on manifests/results."""
+    validate_model_matrix(matrix)
+    for pair in matrix.get("drift_pairs", []):
+        if pair.get("pair_id") == entry_id:
+            return {
+                "entry_id": entry_id,
+                "entry_type": "drift_pair",
+                "comparison_type": pair.get("comparison_type"),
+                "token_kl_applicability": pair.get("token_kl_applicability"),
+                "token_kl_reason_code": pair.get("token_kl_reason_code"),
+                "model_ids": {
+                    "base": pair.get("base_model", {}).get("model_id"),
+                    "tuned": pair.get("instruct_model", {}).get("model_id"),
+                },
+                "metric_applicability": matrix.get("metric_applicability", {}).get("drift_pairs", {}),
+            }
+    for model in matrix.get("standalone_instruct_models", []):
+        model_id = model.get("model_id")
+        entry_key = model.get("entry_id") or model_id
+        if entry_key == entry_id:
+            return {
+                "entry_id": entry_id,
+                "entry_type": "standalone_instruct_model",
+                "comparison_type": "standalone_instruct",
+                "token_kl_applicability": model.get("token_kl_applicability"),
+                "token_kl_reason_code": model.get("token_kl_reason_code"),
+                "model_ids": {"standalone": model_id},
+                "metric_applicability": matrix.get("metric_applicability", {}).get("standalone_instruct_models", {}),
+            }
+    for comparison in matrix.get("cross_family_comparisons", []):
+        if comparison.get("comparison_id") == entry_id:
+            return {
+                "entry_id": entry_id,
+                "entry_type": "cross_family_comparison",
+                "comparison_type": comparison.get("comparison_type"),
+                "token_kl_applicability": comparison.get("token_kl_applicability"),
+                "token_kl_reason_code": comparison.get("token_kl_reason_code"),
+                "model_ids": {
+                    "left": comparison.get("left_model", {}).get("model_id"),
+                    "right": comparison.get("right_model", {}).get("model_id"),
+                },
+                "metric_applicability": matrix.get("metric_applicability", {}).get("cross_family_comparisons", {}),
+            }
+    raise ModelMatrixValidationError(f"model matrix entry not found: {entry_id}")
+
+
 def validate_model_matrix(
     matrix: dict[str, Any],
     *,
@@ -213,7 +278,9 @@ def validate_model_matrix(
     _validate_metric_applicability(matrix)
 
     placeholder_paths = _runtime_placeholder_paths(matrix)
-    real_run_ready = len(placeholder_paths) == 0
+    license_review_blockers = _license_review_blocking_paths(matrix)
+    declared_ready = matrix.get("template_status") == "real_run_ready" and matrix.get("real_run_ready") is True
+    real_run_ready = declared_ready and len(placeholder_paths) == 0 and len(license_review_blockers) == 0
     template_status = matrix.get("template_status")
     if placeholder_paths and template_status == "real_run_ready":
         raise ModelMatrixValidationError(
@@ -223,10 +290,29 @@ def validate_model_matrix(
         raise ModelMatrixValidationError(
             "model matrix real_run_ready=true but runtime placeholders remain"
         )
+    if license_review_blockers and template_status == "real_run_ready":
+        raise ModelMatrixValidationError(
+            "model matrix template_status=real_run_ready but license review evidence is incomplete: "
+            + ", ".join(license_review_blockers)
+        )
+    if license_review_blockers and matrix.get("real_run_ready") is True:
+        raise ModelMatrixValidationError(
+            "model matrix real_run_ready=true but license review evidence is incomplete: "
+            + ", ".join(license_review_blockers)
+        )
+    if require_real_run_ready and template_status != "real_run_ready":
+        raise ModelMatrixValidationError("model matrix is not real-run ready; template_status must be real_run_ready")
+    if require_real_run_ready and matrix.get("real_run_ready") is not True:
+        raise ModelMatrixValidationError("model matrix is not real-run ready; real_run_ready must be true")
     if require_real_run_ready and placeholder_paths:
         raise ModelMatrixValidationError(
             "model matrix is not real-run ready; replace placeholders: "
             + ", ".join(placeholder_paths)
+        )
+    if require_real_run_ready and license_review_blockers:
+        raise ModelMatrixValidationError(
+            "model matrix is not real-run ready; complete license review evidence: "
+            + ", ".join(license_review_blockers)
         )
 
     return {
@@ -234,6 +320,8 @@ def validate_model_matrix(
         "real_run_ready": real_run_ready,
         "placeholder_paths": placeholder_paths,
         "placeholder_count": len(placeholder_paths),
+        "license_review_blocker_paths": license_review_blockers,
+        "license_review_blocker_count": len(license_review_blockers),
         "drift_pair_count": len(matrix.get("drift_pairs", [])),
         "standalone_instruct_model_count": len(matrix.get("standalone_instruct_models", [])),
         "cross_family_comparison_count": len(matrix.get("cross_family_comparisons", [])),
