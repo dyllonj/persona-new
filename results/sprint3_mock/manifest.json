@@ -1,0 +1,36 @@
+{
+  "adapter": "mock",
+  "chat_template_hash": "not_available",
+  "code_commit": "d49095dc10657c0400de91e436c6aac291254a6b",
+  "decoding_params": {
+    "max_tokens": 140,
+    "temperature": 0.0
+  },
+  "dirty_worktree": true,
+  "embedding_model_revision": "not_available",
+  "extractor_version": "sprint2",
+  "gpu_cuda_driver": "not_available",
+  "model_base": "base",
+  "model_base_alias": "base",
+  "model_base_revision_or_hash": "not_available",
+  "model_tuned": "tuned",
+  "model_tuned_alias": "tuned",
+  "model_tuned_revision_or_hash": "not_available",
+  "nli_or_judge_model_revision": "not_available",
+  "persona_jsonl_hash": "sha256:55ebbd60403331a4b59ebf6bfdabbd70ca6c8405cd31d2d3809142bbacf7aa81",
+  "prompt_template_hash": "sha256:631a8b66d677e9b0a6956bae258bb78e2c4312129ab35d9c233942ec0b26b635",
+  "prompt_template_version": "v1",
+  "provider_or_endpoint": "local_mock",
+  "run_id": "sprint3_mock",
+  "score_mode": "canonical",
+  "scoring_capability": "none",
+  "seeds": [
+    1
+  ],
+  "serving_stack": "mock",
+  "serving_stack_version": "sprint1",
+  "stop_sequences": [],
+  "timestamp_utc": "2026-05-25T05:08:04Z",
+  "tokenizer_hash": "not_available",
+  "tokenizer_name": "not_available"
+}
