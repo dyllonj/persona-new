@@ -1,0 +1,58 @@
+{
+  "template_status": "placeholder_not_runnable",
+  "purpose": "Sprint 8 local vLLM 20-persona smoke-run template. Replace every angle-bracket value before use.",
+  "adapter": "vllm",
+  "base_url": "<required-local-vllm-openai-compatible-endpoint>",
+  "persona_path": "data/personas.full.jsonl",
+  "promotion_manifest_path": "<required-sprint-7-promotion-manifest-path>",
+  "output_dir": "results/vllm_smoke_20",
+  "run_id": "vllm_smoke_20",
+  "limit_personas": 20,
+  "seeds": [1],
+  "models": {
+    "base": {
+      "model_id": "<required-base-model-id>",
+      "revision_or_hash": "<required-base-model-revision-or-hash>"
+    },
+    "tuned": {
+      "model_id": "<required-tuned-model-id>",
+      "revision_or_hash": "<required-tuned-model-revision-or-hash>"
+    }
+  },
+  "tokenizer": {
+    "name": "<required-tokenizer-name-or-path>",
+    "hash": "<required-tokenizer-hash>"
+  },
+  "chat_template": {
+    "hash": "<required-chat-template-hash>"
+  },
+  "serving": {
+    "stack": "vllm",
+    "version": "<required-vllm-version>",
+    "gpu_cuda_driver": "<required-gpu-cuda-driver-summary>"
+  },
+  "decoding_params": {
+    "temperature": 0.0,
+    "max_tokens": 140
+  },
+  "token_kl": {
+    "disable_token_kl": true,
+    "expected_status": "not_applicable",
+    "reason": "Canonical Token-KL remains unavailable until fixed aligned continuation scoring is proven."
+  },
+  "required_manifest_fields": [
+    "persona_jsonl_hash",
+    "promotion_manifest_hash",
+    "model_base",
+    "model_tuned",
+    "model_base_revision_or_hash",
+    "model_tuned_revision_or_hash",
+    "tokenizer_name",
+    "tokenizer_hash",
+    "chat_template_hash",
+    "serving_stack",
+    "serving_stack_version",
+    "gpu_cuda_driver",
+    "raw_request_response_logging_status"
+  ]
+}

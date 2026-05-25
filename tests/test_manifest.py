@@ -142,12 +142,39 @@ class ManifestAndResultTests(unittest.TestCase):
             "extractor_version",
             "embedding_model_revision",
             "nli_or_judge_model_revision",
+            "promotion_manifest_path",
+            "promotion_manifest_hash",
+            "raw_request_response_logging_status",
+            "raw_request_response_logging",
         }
 
         self.assertTrue(required.issubset(manifest))
         self.assertIs(manifest["dirty_worktree"], True)
         expected_hash = "sha256:" + hashlib.sha256(SAMPLE_PATH.read_bytes()).hexdigest()
         self.assertEqual(manifest["persona_jsonl_hash"], expected_hash)
+        self.assertIsNone(manifest["promotion_manifest_path"])
+        self.assertIsNone(manifest["promotion_manifest_hash"])
+        self.assertEqual(manifest["raw_request_response_logging_status"], "enabled")
+        self.assertTrue(manifest["raw_request_response_logging"]["raw_request_logged"])
+        self.assertTrue(manifest["raw_request_response_logging"]["raw_response_logged"])
+        validate_run_manifest(manifest)
+
+    def test_manifest_records_promotion_manifest_hash_when_provided(self):
+        manifest = create_run_manifest(
+            persona_path=SAMPLE_PATH,
+            model_base="base",
+            model_tuned="tuned",
+            seeds=[1],
+            run_id="test-run",
+            timestamp_utc="2026-05-25T00:00:00Z",
+            code_commit="test-commit",
+            dirty_worktree=True,
+            promotion_manifest_path=SAMPLE_PATH,
+        )
+
+        expected_hash = "sha256:" + hashlib.sha256(SAMPLE_PATH.read_bytes()).hexdigest()
+        self.assertEqual(manifest["promotion_manifest_path"], str(SAMPLE_PATH))
+        self.assertEqual(manifest["promotion_manifest_hash"], expected_hash)
         validate_run_manifest(manifest)
 
     def test_result_row_includes_required_keys_and_token_kl_not_applicable(self):

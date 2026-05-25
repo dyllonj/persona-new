@@ -186,6 +186,65 @@ class RunCliTests(unittest.TestCase):
                 self.assertEqual(row["metrics"]["token_kl"]["reason_code"], "disabled_by_user")
                 self.assertEqual(row["metrics"]["token_kl"]["scoring_path"], "none")
 
+    def test_run_records_explicit_runtime_metadata_in_manifest_and_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "runtime-metadata"
+            promotion_manifest = Path(tmp) / "promotion-manifest.json"
+            promotion_manifest.write_text('{"status":"fixture"}\n', encoding="utf-8")
+            completed = self.run_cli(
+                "run",
+                "--persona-path",
+                str(SAMPLE_PATH),
+                "--out",
+                str(out),
+                "--adapter",
+                "mock",
+                "--model-base",
+                "base",
+                "--model-tuned",
+                "tuned",
+                "--model-base-revision-or-hash",
+                "base-revision",
+                "--model-tuned-revision-or-hash",
+                "tuned-revision",
+                "--tokenizer-name",
+                "fixture-tokenizer",
+                "--tokenizer-hash",
+                "sha256:fixture-tokenizer",
+                "--chat-template-hash",
+                "sha256:fixture-chat-template",
+                "--gpu-cuda-driver",
+                "fixture-gpu-driver",
+                "--promotion-manifest-path",
+                str(promotion_manifest),
+                "--seeds",
+                "1",
+                "--limit-personas",
+                "1",
+                "--run-id",
+                "runtime-metadata",
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+            validate_run_manifest(manifest)
+            self.assertEqual(manifest["model_base_revision_or_hash"], "base-revision")
+            self.assertEqual(manifest["model_tuned_revision_or_hash"], "tuned-revision")
+            self.assertEqual(manifest["tokenizer_name"], "fixture-tokenizer")
+            self.assertEqual(manifest["tokenizer_hash"], "sha256:fixture-tokenizer")
+            self.assertEqual(manifest["chat_template_hash"], "sha256:fixture-chat-template")
+            self.assertEqual(manifest["gpu_cuda_driver"], "fixture-gpu-driver")
+            self.assertEqual(manifest["promotion_manifest_path"], str(promotion_manifest))
+            self.assertTrue(manifest["promotion_manifest_hash"].startswith("sha256:"))
+            self.assertEqual(manifest["raw_request_response_logging_status"], "enabled")
+
+            first_row = json.loads((out / "results.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(first_row["base"]["raw_request"]["model_revision_or_hash"], "base-revision")
+            self.assertEqual(first_row["tuned"]["raw_request"]["model_revision_or_hash"], "tuned-revision")
+            self.assertEqual(first_row["base"]["raw_request"]["tokenizer_name"], "fixture-tokenizer")
+            self.assertEqual(first_row["base"]["raw_request"]["tokenizer_hash"], "sha256:fixture-tokenizer")
+            self.assertEqual(first_row["base"]["raw_request"]["chat_template_hash"], "sha256:fixture-chat-template")
+
     def test_run_rejects_limit_personas_above_sprint3_execution_cap(self):
         sample_rows = [
             json.loads(line)

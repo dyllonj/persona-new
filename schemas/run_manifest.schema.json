@@ -139,6 +139,43 @@
     "nli_or_judge_model_revision": {
       "type": "string",
       "minLength": 1
+    },
+    "promotion_manifest_path": {
+      "type": ["string", "null"]
+    },
+    "promotion_manifest_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "raw_request_response_logging_status": {
+      "type": "string",
+      "enum": ["enabled", "disabled"]
+    },
+    "raw_request_response_logging": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "raw_request_logged",
+        "raw_response_logged",
+        "storage"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["enabled", "disabled"]
+        },
+        "raw_request_logged": {
+          "type": "boolean"
+        },
+        "raw_response_logged": {
+          "type": "boolean"
+        },
+        "storage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }

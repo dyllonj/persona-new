@@ -161,6 +161,16 @@ LOGICALLY_INVALID_BEHAVIOR_PAIRS = {
     ("support", "refuse"),
 }
 METRIC_STATUS_VALUES = {"not_run", "ok", "not_applicable", "mock_only", "diagnostic_only", "error"}
+REAL_HTTP_ADAPTERS = {"vllm", "openai-compatible"}
+EXPLICIT_REAL_RUN_METADATA_FIELDS = (
+    "model_base_revision_or_hash",
+    "model_tuned_revision_or_hash",
+    "tokenizer_name",
+    "tokenizer_hash",
+    "chat_template_hash",
+    "serving_stack_version",
+    "promotion_manifest_path",
+)
 
 
 class PersonaValidationError(ValueError):
@@ -1385,7 +1395,10 @@ def create_run_manifest(
     nli_or_judge_model_revision: str = "not_available",
     code_commit: str | None = None,
     dirty_worktree: bool | None = None,
+    promotion_manifest_path: str | Path | None = None,
+    raw_request_response_logging_status: str = "enabled",
 ) -> dict[str, Any]:
+    promotion_path = Path(promotion_manifest_path) if promotion_manifest_path else None
     manifest = {
         "run_id": run_id or f"run-{utc_now()}",
         "timestamp_utc": timestamp_utc or utc_now(),
@@ -1413,6 +1426,15 @@ def create_run_manifest(
         "extractor_version": extractor_version,
         "embedding_model_revision": embedding_model_revision,
         "nli_or_judge_model_revision": nli_or_judge_model_revision,
+        "promotion_manifest_path": str(promotion_path) if promotion_path else None,
+        "promotion_manifest_hash": hash_file_bytes(promotion_path) if promotion_path else None,
+        "raw_request_response_logging_status": raw_request_response_logging_status,
+        "raw_request_response_logging": {
+            "status": raw_request_response_logging_status,
+            "raw_request_logged": True,
+            "raw_response_logged": True,
+            "storage": "results_jsonl_model_outputs",
+        },
     }
     validate_run_manifest(manifest)
     return manifest
@@ -2012,8 +2034,35 @@ def _limited_rows(rows: list[dict[str, Any]], limit: int | None) -> list[dict[st
 def _enforce_staged_execution_cap(persona_count: int) -> None:
     if persona_count > STAGED_RUN_MAX_PERSONAS:
         raise PersonaValidationError(
-            f"Sprint 3 run execution is capped at {STAGED_RUN_MAX_PERSONAS} personas; "
-            "use plan/dry-run for larger arithmetic until the full-run gate exists"
+            f"staged run execution is capped at {STAGED_RUN_MAX_PERSONAS} personas; "
+            "use the plan command for larger arithmetic until the full-run gate exists"
+        )
+
+
+def _is_missing_explicit_metadata(value: str | None) -> bool:
+    return value is None or not value.strip() or value.strip() == "not_available"
+
+
+def _require_real_adapter_run_contract(args: argparse.Namespace, persona_count: int) -> None:
+    if args.adapter not in REAL_HTTP_ADAPTERS or args.dry_run:
+        return
+    _enforce_staged_execution_cap(persona_count)
+    expected_full_path = (REPO_ROOT / "data" / "personas.full.jsonl").resolve()
+    actual_path = Path(args.persona_path).resolve() if args.persona_path else None
+    if actual_path != expected_full_path:
+        raise PersonaValidationError(
+            "real vLLM/openai-compatible smoke runs require "
+            "--persona-path data/personas.full.jsonl after Sprint 7 promotion"
+        )
+    missing = [
+        f"--{field.replace('_', '-')}"
+        for field in EXPLICIT_REAL_RUN_METADATA_FIELDS
+        if _is_missing_explicit_metadata(getattr(args, field, None))
+    ]
+    if missing:
+        raise PersonaValidationError(
+            "real vLLM/openai-compatible smoke runs require explicit runtime metadata: "
+            + ", ".join(missing)
         )
 
 
@@ -2061,6 +2110,7 @@ def _adapter_from_args(args: argparse.Namespace) -> BaseAdapter:
             adapter_name=args.adapter,
             api_key_env=args.api_key_env,
             serving_stack=serving_stack,
+            serving_stack_version=args.serving_stack_version or "not_available",
         )
     raise PersonaValidationError(f"unsupported adapter: {args.adapter!r}")
 
@@ -2119,6 +2169,14 @@ def _score_result_for_run(
         variant_type=variant["type"],
         model_alias=model_alias,
         model_id=model_id,
+        model_revision_or_hash=(
+            args.model_base_revision_or_hash
+            if model_alias == args.model_base_alias
+            else args.model_tuned_revision_or_hash
+        ),
+        tokenizer_name=args.tokenizer_name,
+        tokenizer_hash=args.tokenizer_hash,
+        chat_template_hash=args.chat_template_hash,
         seed=seed,
         decoding_params=decoding_params,
         stop_sequences=stop_sequences,
@@ -2162,6 +2220,10 @@ def _build_run_rows(
                     variant_type=variant["type"],
                     model_alias=args.model_base_alias,
                     model_id=args.model_base,
+                    model_revision_or_hash=args.model_base_revision_or_hash,
+                    tokenizer_name=args.tokenizer_name,
+                    tokenizer_hash=args.tokenizer_hash,
+                    chat_template_hash=args.chat_template_hash,
                     seed=seed,
                     decoding_params=decoding_params,
                     stop_sequences=stop_sequences,
@@ -2175,6 +2237,10 @@ def _build_run_rows(
                     variant_type=variant["type"],
                     model_alias=args.model_tuned_alias,
                     model_id=args.model_tuned,
+                    model_revision_or_hash=args.model_tuned_revision_or_hash,
+                    tokenizer_name=args.tokenizer_name,
+                    tokenizer_hash=args.tokenizer_hash,
+                    chat_template_hash=args.chat_template_hash,
                     seed=seed,
                     decoding_params=decoding_params,
                     stop_sequences=stop_sequences,
@@ -2287,12 +2353,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if args.out:
         _run_output_dir(args)
+    _enforce_staged_execution_cap(persona_count)
     if args.dry_run:
         print(f"planned_generation_calls={planned_calls}")
         return 0
     if rows is None:
         raise PersonaValidationError("non-dry run requires --persona-path")
-    _enforce_staged_execution_cap(persona_count)
+    _require_real_adapter_run_contract(args, persona_count)
 
     output_dir = _run_output_dir(args)
     run_id = args.run_id or dt.datetime.now(dt.UTC).strftime("run-%Y%m%dT%H%M%SZ")
@@ -2303,16 +2370,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         seeds=seeds,
         run_id=run_id,
         prompt_template_version=args.prompt_template_version,
+        chat_template_hash=args.chat_template_hash,
+        tokenizer_name=args.tokenizer_name,
+        tokenizer_hash=args.tokenizer_hash,
+        model_base_revision_or_hash=args.model_base_revision_or_hash,
+        model_tuned_revision_or_hash=args.model_tuned_revision_or_hash,
         adapter=adapter.adapter_name,
         provider_or_endpoint=adapter.provider_or_endpoint,
         serving_stack=adapter.serving_stack,
         serving_stack_version=adapter.serving_stack_version,
         scoring_capability=adapter.scoring_capability,
+        gpu_cuda_driver=args.gpu_cuda_driver,
         decoding_params=decoding_params,
         stop_sequences=stop_sequences,
         extractor_version=EXTRACTOR_VERSION,
         embedding_model_revision="not_available",
         nli_or_judge_model_revision="not_available",
+        promotion_manifest_path=args.promotion_manifest_path,
     )
     manifest["harness_version"] = EVALUATOR_VERSION
     manifest["metric_version"] = METRIC_VERSION
@@ -2374,6 +2448,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--base-url")
     run_parser.add_argument("--api-key-env")
     run_parser.add_argument("--serving-stack")
+    run_parser.add_argument("--serving-stack-version")
     run_parser.add_argument(
         "--score-mode",
         choices=["canonical", "disabled", "diagnostic_only"],
@@ -2382,8 +2457,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--disable-token-kl", action="store_true")
     run_parser.add_argument("--model-base", required=True)
     run_parser.add_argument("--model-tuned", required=True)
+    run_parser.add_argument("--model-base-revision-or-hash", default="not_available")
+    run_parser.add_argument("--model-tuned-revision-or-hash", default="not_available")
     run_parser.add_argument("--model-base-alias", default="base")
     run_parser.add_argument("--model-tuned-alias", default="tuned")
+    run_parser.add_argument("--tokenizer-name", default="not_available")
+    run_parser.add_argument("--tokenizer-hash", default="not_available")
+    run_parser.add_argument("--chat-template-hash", default="not_available")
+    run_parser.add_argument("--gpu-cuda-driver", default="not_available")
+    run_parser.add_argument("--promotion-manifest-path")
     run_parser.add_argument("--seeds", nargs="+", required=True)
     run_parser.add_argument("--temperature", type=float, default=0.0)
     run_parser.add_argument("--max-tokens", type=int, default=140)
