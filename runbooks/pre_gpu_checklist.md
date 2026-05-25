@@ -16,7 +16,9 @@ python3 dataset_readiness.py --persona-path data/personas.full.jsonl --review-ma
 python3 persona_eval.py plan --persona-count 20 --variants-per-persona 6 --model-count 2 --seed-count 1
 python3 persona_eval.py plan --persona-count 50 --variants-per-persona 6 --model-count 2 --seed-count 2
 python3 persona_eval.py plan --persona-count 200 --variants-per-persona 6 --model-count 2 --seed-count 2
+python3 persona_eval.py validate-model-matrix --matrix-path configs/model_matrix.production_open.json
 python3 -m json.tool configs/model_pair.qwen2_5_7b.json >/dev/null
+python3 -m json.tool configs/model_matrix.production_open.json >/dev/null
 python3 -m json.tool approvals/dev_run_approval.template.json >/dev/null
 python3 -m json.tool approvals/full_run_approval.template.json >/dev/null
 python3 -m unittest discover -s tests
@@ -127,6 +129,8 @@ Stop before the smoke run if:
 - `reviews/personas.full.review.jsonl` is missing or mismatched.
 - The endpoint is hosted, remote, or not explicitly approved for this run.
 - The endpoint is not OpenAI-compatible.
+- The production/open model matrix does not validate, or a matrix intended for
+  execution still has placeholder endpoints or revision hashes.
 - The run command exceeds 20 personas, 6 variants, 2 models, or 1 seed.
 - Raw request/response logging would be disabled.
 - The command omits model revision/hash, tokenizer hash, chat-template hash, vLLM version, or GPU/CUDA/driver metadata.

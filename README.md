@@ -161,6 +161,21 @@ Token-KL remains unavailable unless both models are scored on the same fixed
 continuation with compatible tokenizer, vocabulary, chat template, and enough
 logprob depth for the configured `k`.
 
+## Production/Open Model Matrix
+
+The production/open model matrix is a local config template, not a run command:
+
+```bash
+python3 persona_eval.py validate-model-matrix --matrix-path configs/model_matrix.production_open.json
+```
+
+It separates same-family base/instruct drift pairs from standalone instruct
+models and cross-family production comparisons. Same-family pairs may mark
+Token-KL `canonical_possible` only as a conditional future state after aligned
+fixed-continuation scoring proof. Standalone and cross-family comparisons keep
+Token-KL `not_applicable` and use PA plus BC-F1 unless an explicit reviewed
+paired-baseline exception is added.
+
 ## Persona Adherence Warning
 
 Current Persona Adherence values are mock/plumbing only when present. The

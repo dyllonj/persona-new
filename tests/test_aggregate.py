@@ -183,6 +183,28 @@ class AggregateTests(unittest.TestCase):
         self.assertEqual(token_kl["diagnostic_only_count"], 1)
         self.assertEqual(token_kl["status_counts"]["diagnostic_only"], 1)
 
+    def test_aggregate_rejects_canonical_token_kl_conflicting_with_matrix_applicability(self):
+        rows = self.copy_rows()[:1]
+        rows[0]["model_pair"]["token_kl_applicability"] = "not_applicable"
+        rows[0]["metrics"]["token_kl"] = ScoreContinuationResult(
+            status="ok",
+            value=0.4,
+            reason_code=None,
+            scoring_path="local_forward",
+            fixed_continuation_id="fixture-continuation",
+            fixed_continuation_hash="sha256:" + "0" * 64,
+            tokenizer_hash_match=True,
+            vocabulary_match=True,
+            chat_template_hash_match=True,
+            k=50,
+            endpoint_cap=None,
+            diagnostic_only=False,
+        ).to_token_kl_status()
+        manifest_path, results_path = self.write_temp_run(rows)
+
+        with self.assertRaisesRegex(PersonaValidationError, "token_kl.status=ok conflicts"):
+            aggregate.build_report(manifest_path=manifest_path, results_path=results_path)
+
     def test_bc_f1_field_scores_aggregate_correctly(self):
         rows = self.copy_rows()[:2]
         self.set_bc(rows[0], 0.25)

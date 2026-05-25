@@ -21,6 +21,8 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+from model_matrix import load_model_matrix, validate_model_matrix
+
 try:
     import jsonschema
 except ImportError:  # pragma: no cover - covered only in stripped environments.
@@ -135,6 +137,7 @@ TOKEN_KL_STATUS_FIELDS = (
     "diagnostic_only",
 )
 TOKEN_KL_STATUS_VALUES = {"ok", "not_applicable", "diagnostic_only", "error"}
+TOKEN_KL_APPLICABILITY_VALUES = {"canonical_possible", "diagnostic_only", "not_applicable"}
 TOKEN_KL_SCORING_PATHS = {
     "local_forward",
     "vllm_prompt_logprobs",
@@ -697,6 +700,37 @@ def validate_run_manifest(manifest: dict[str, Any]) -> None:
     validate_schema_file(manifest, RUN_MANIFEST_SCHEMA_PATH)
 
 
+def _token_kl_applicability_from_result_row(result_row: dict[str, Any]) -> str | None:
+    model_pair = result_row.get("model_pair")
+    if not isinstance(model_pair, dict):
+        return None
+    direct = model_pair.get("token_kl_applicability")
+    if isinstance(direct, str):
+        return direct
+    metric_applicability = model_pair.get("metric_applicability")
+    if isinstance(metric_applicability, dict):
+        value = metric_applicability.get("token_kl_applicability", metric_applicability.get("token_kl"))
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def validate_result_row_token_kl_applicability(result_row: dict[str, Any]) -> None:
+    applicability = _token_kl_applicability_from_result_row(result_row)
+    if applicability is None:
+        return
+    if applicability not in TOKEN_KL_APPLICABILITY_VALUES:
+        raise PersonaValidationError(f"unsupported model_pair.token_kl_applicability: {applicability!r}")
+    token_kl = result_row.get("metrics", {}).get("token_kl", {})
+    if not isinstance(token_kl, dict):
+        raise PersonaValidationError("metrics.token_kl must be an object")
+    status = token_kl.get("status")
+    if applicability in {"not_applicable", "diagnostic_only"} and status == "ok":
+        raise PersonaValidationError(
+            f"token_kl.status=ok conflicts with model_pair.token_kl_applicability={applicability}"
+        )
+
+
 def validate_result_row(result_row: dict[str, Any]) -> None:
     validate_schema_file(result_row, RESULT_ROW_SCHEMA_PATH)
     validate_behavior_tags(result_row.get("behavior_tags", {}))
@@ -704,6 +738,7 @@ def validate_result_row(result_row: dict[str, Any]) -> None:
     if not isinstance(metrics, dict):
         raise PersonaValidationError("result_row.metrics must be an object")
     validate_token_kl_status(metrics.get("token_kl", {}))
+    validate_result_row_token_kl_applicability(result_row)
     validate_persona_adherence_status(metrics.get("persona_adherence", {}))
     validate_behavioral_consistency_status(metrics.get("behavioral_consistency_f1", {}))
 
@@ -2978,6 +3013,21 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate_model_matrix(args: argparse.Namespace) -> int:
+    matrix = load_model_matrix(args.matrix_path)
+    report = validate_model_matrix(
+        matrix,
+        require_real_run_ready=args.require_real_run_ready,
+    )
+    print(f"model_matrix_status={report['status']}")
+    print(f"real_run_readiness={'ready' if report['real_run_ready'] else 'blocked'}")
+    print(f"placeholder_count={report['placeholder_count']}")
+    print(f"drift_pairs={report['drift_pair_count']}")
+    print(f"standalone_instruct_models={report['standalone_instruct_model_count']}")
+    print(f"cross_family_comparisons={report['cross_family_comparison_count']}")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     _require_model_pair(args)
     seeds = parse_seeds(args.seeds)
@@ -3109,6 +3159,18 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--chat-template-hash", default="not_available")
     preflight_parser.add_argument("--serving-stack-version", default="not_available")
     preflight_parser.set_defaults(func=cmd_preflight)
+
+    matrix_parser = subparsers.add_parser(
+        "validate-model-matrix",
+        help="validate production/open model matrix config without network or model calls",
+    )
+    matrix_parser.add_argument("--matrix-path", required=True)
+    matrix_parser.add_argument(
+        "--require-real-run-ready",
+        action="store_true",
+        help="fail if endpoint or model revision/hash placeholders remain",
+    )
+    matrix_parser.set_defaults(func=cmd_validate_model_matrix)
 
     run_parser = subparsers.add_parser("run", help="run a staged mock or explicit adapter smoke")
     run_parser.add_argument("--persona-path")

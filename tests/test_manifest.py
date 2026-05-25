@@ -462,6 +462,27 @@ class ManifestAndResultTests(unittest.TestCase):
         self.assertEqual(status["status"], "ok")
         self.assertEqual(status["value"], 0.0)
 
+    def test_result_row_rejects_canonical_token_kl_when_matrix_marks_not_applicable(self):
+        result_row = self.build_sprint2_result_row()
+        result_row["model_pair"]["token_kl_applicability"] = "not_applicable"
+        result_row["metrics"]["token_kl"] = ScoreContinuationResult(
+            status="ok",
+            value=0.0,
+            reason_code=None,
+            scoring_path="local_forward",
+            fixed_continuation_id="fixture-continuation",
+            fixed_continuation_hash="sha256:" + "0" * 64,
+            tokenizer_hash_match=True,
+            vocabulary_match=True,
+            chat_template_hash_match=True,
+            k=50,
+            endpoint_cap=None,
+            diagnostic_only=False,
+        ).to_token_kl_status()
+
+        with self.assertRaisesRegex(PersonaValidationError, "token_kl.status=ok conflicts"):
+            validate_result_row(result_row)
+
     def test_endpoint_capped_scoring_can_be_represented_as_diagnostic_only(self):
         status = endpoint_capped_token_kl_status(
             fixed_continuation_id="fixture-continuation",

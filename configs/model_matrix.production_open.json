@@ -1,0 +1,360 @@
+{
+  "schema_version": "model_matrix_v1",
+  "matrix_name": "production_open_foundation_examples",
+  "template_status": "template_with_placeholders",
+  "real_run_ready": false,
+  "purpose": "Configurable examples for production-relevant open-weight/foundation model comparisons. This file is not a runnable command source until every endpoint and revision placeholder is replaced and license review is recorded.",
+  "drift_pairs": [
+    {
+      "pair_id": "qwen2_5_7b_base_vs_instruct",
+      "family": "qwen2.5",
+      "comparison_type": "same_family_base_instruct",
+      "base_model": {
+        "model_id": "Qwen/Qwen2.5-7B",
+        "role": "base",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "qwen2.5",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "Canonical Token-KL is not available until tokenizer, vocabulary, rendered prompt, chat-template policy, and fixed-continuation scoring proof are recorded."
+        ]
+      },
+      "instruct_model": {
+        "model_id": "Qwen/Qwen2.5-7B-Instruct",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "qwen2.5",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "Canonical Token-KL is not available until tokenizer, vocabulary, rendered prompt, chat-template policy, and fixed-continuation scoring proof are recorded."
+        ]
+      },
+      "token_kl_applicability": "canonical_possible",
+      "token_kl_reason_code": "same_family_alignment_required",
+      "alignment_contract": {
+        "same_tokenizer_family_required": true,
+        "same_vocabulary_required": true,
+        "prompt_rendering_hash_required": true,
+        "chat_template_policy_match_required": true,
+        "fixed_continuation_scoring_required": true,
+        "comparable_next_token_logprobs_required": true,
+        "canonical_token_kl_status_before_proof": "not_applicable",
+        "accepted_scoring_paths": [
+          "local_forward",
+          "vllm_prompt_logprobs",
+          "one_token_loop"
+        ],
+        "minimum_top_k": 50
+      },
+      "notes": [
+        "Same-family base/instruct drift pair. PA and BC-F1 are always applicable; Token-KL is only conditionally possible after aligned fixed-continuation scoring proof."
+      ]
+    },
+    {
+      "pair_id": "llama3_1_8b_base_vs_instruct",
+      "family": "llama3.1",
+      "comparison_type": "same_family_base_instruct",
+      "base_model": {
+        "model_id": "meta-llama/Llama-3.1-8B",
+        "role": "base",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "llama3.1",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "License/access terms must be reviewed before any run."
+        ]
+      },
+      "instruct_model": {
+        "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "llama3.1",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "License/access terms must be reviewed before any run."
+        ]
+      },
+      "token_kl_applicability": "canonical_possible",
+      "token_kl_reason_code": "same_family_alignment_required",
+      "alignment_contract": {
+        "same_tokenizer_family_required": true,
+        "same_vocabulary_required": true,
+        "prompt_rendering_hash_required": true,
+        "chat_template_policy_match_required": true,
+        "fixed_continuation_scoring_required": true,
+        "comparable_next_token_logprobs_required": true,
+        "canonical_token_kl_status_before_proof": "not_applicable",
+        "accepted_scoring_paths": [
+          "local_forward",
+          "vllm_prompt_logprobs",
+          "one_token_loop"
+        ],
+        "minimum_top_k": 50
+      },
+      "notes": [
+        "Same-family base/instruct drift pair. Token-KL is possible only as a future aligned-scoring metric, not as free-running output comparison."
+      ]
+    },
+    {
+      "pair_id": "mistral_7b_v0_3_base_vs_instruct",
+      "family": "mistral-7b-v0.3",
+      "comparison_type": "same_family_base_instruct",
+      "base_model": {
+        "model_id": "mistralai/Mistral-7B-v0.3",
+        "role": "base",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "mistral-7b-v0.3",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "License/access terms must be reviewed before any run."
+        ]
+      },
+      "instruct_model": {
+        "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "mistral-7b-v0.3",
+        "expected_chat_template_policy": "fixed_rendered_prompt_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "canonical_possible",
+        "token_kl_reason_code": "same_family_alignment_required",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Config example only; not a runtime requirement.",
+          "License/access terms must be reviewed before any run."
+        ]
+      },
+      "token_kl_applicability": "canonical_possible",
+      "token_kl_reason_code": "same_family_alignment_required",
+      "alignment_contract": {
+        "same_tokenizer_family_required": true,
+        "same_vocabulary_required": true,
+        "prompt_rendering_hash_required": true,
+        "chat_template_policy_match_required": true,
+        "fixed_continuation_scoring_required": true,
+        "comparable_next_token_logprobs_required": true,
+        "canonical_token_kl_status_before_proof": "not_applicable",
+        "accepted_scoring_paths": [
+          "local_forward",
+          "vllm_prompt_logprobs",
+          "one_token_loop"
+        ],
+        "minimum_top_k": 50
+      },
+      "notes": [
+        "Same-family base/instruct drift pair. Token-KL requires an aligned scoring proof before any canonical result row may be emitted."
+      ]
+    }
+  ],
+  "standalone_instruct_models": [
+    {
+      "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+      "role": "standalone_instruct",
+      "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+      "serving_stack": "vllm",
+      "expected_tokenizer_family": "llama3.1",
+      "expected_chat_template_policy": "model_native_chat_template_hash_required",
+      "license_review_required": true,
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "standalone_instruct_without_explicit_paired_baseline",
+      "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+      "notes": [
+        "Production/open standalone instruct example. Compare with PA and BC-F1 unless an explicit paired baseline is configured."
+      ]
+    },
+    {
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "role": "standalone_instruct",
+      "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+      "serving_stack": "vllm",
+      "expected_tokenizer_family": "qwen2.5",
+      "expected_chat_template_policy": "model_native_chat_template_hash_required",
+      "license_review_required": true,
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "standalone_instruct_without_explicit_paired_baseline",
+      "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+      "notes": [
+        "Production/open standalone instruct example. Token-KL is not a standalone quality metric."
+      ]
+    },
+    {
+      "model_id": "google/gemma-2-9b-it",
+      "role": "standalone_instruct",
+      "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+      "serving_stack": "vllm",
+      "expected_tokenizer_family": "gemma-2",
+      "expected_chat_template_policy": "model_native_chat_template_hash_required",
+      "license_review_required": true,
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "standalone_instruct_without_explicit_paired_baseline",
+      "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+      "notes": [
+        "Production/open standalone instruct example. Record exact artifact hash before execution."
+      ]
+    },
+    {
+      "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+      "role": "standalone_instruct",
+      "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+      "serving_stack": "vllm",
+      "expected_tokenizer_family": "mistral-7b-v0.3",
+      "expected_chat_template_policy": "model_native_chat_template_hash_required",
+      "license_review_required": true,
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "standalone_instruct_without_explicit_paired_baseline",
+      "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+      "notes": [
+        "Production/open standalone instruct example. PA and BC-F1 remain the primary production-comparison metrics."
+      ]
+    },
+    {
+      "model_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+      "role": "standalone_instruct",
+      "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+      "serving_stack": "vllm",
+      "expected_tokenizer_family": "deepseek-r1-distill-qwen",
+      "expected_chat_template_policy": "model_native_chat_template_hash_required",
+      "license_review_required": true,
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "standalone_instruct_without_explicit_paired_baseline",
+      "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+      "notes": [
+        "Production/open standalone instruct example. Treat as a production comparator, not a canonical Token-KL pair."
+      ]
+    }
+  ],
+  "cross_family_comparisons": [
+    {
+      "comparison_id": "llama3_1_8b_instruct_vs_qwen2_5_7b_instruct",
+      "comparison_type": "cross_family",
+      "left_model": {
+        "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "llama3.1",
+        "expected_chat_template_policy": "model_native_chat_template_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "not_applicable",
+        "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Cross-family comparator member. Canonical Token-KL is rejected."
+        ]
+      },
+      "right_model": {
+        "model_id": "Qwen/Qwen2.5-7B-Instruct",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "qwen2.5",
+        "expected_chat_template_policy": "model_native_chat_template_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "not_applicable",
+        "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Cross-family comparator member. Canonical Token-KL is rejected."
+        ]
+      },
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+      "notes": [
+        "Use PA and BC-F1 for cross-family production comparisons. Token-KL must remain not_applicable unless a future, explicit aligned-scoring exception is proven and reviewed."
+      ]
+    },
+    {
+      "comparison_id": "mistral_7b_instruct_v0_3_vs_gemma_2_9b_it",
+      "comparison_type": "cross_family",
+      "left_model": {
+        "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "mistral-7b-v0.3",
+        "expected_chat_template_policy": "model_native_chat_template_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "not_applicable",
+        "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Cross-family comparator member. Canonical Token-KL is rejected."
+        ]
+      },
+      "right_model": {
+        "model_id": "google/gemma-2-9b-it",
+        "role": "instruct",
+        "provider_or_endpoint": "<local-vllm-or-openai-compatible-endpoint>",
+        "serving_stack": "vllm",
+        "expected_tokenizer_family": "gemma-2",
+        "expected_chat_template_policy": "model_native_chat_template_hash_required",
+        "license_review_required": true,
+        "token_kl_applicability": "not_applicable",
+        "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+        "required_revision_or_hash": "<fill-from-gpu-host-before-execution>",
+        "notes": [
+          "Cross-family comparator member. Canonical Token-KL is rejected."
+        ]
+      },
+      "token_kl_applicability": "not_applicable",
+      "token_kl_reason_code": "cross_family_tokenizer_or_vocab_mismatch",
+      "notes": [
+        "Use PA and BC-F1 for cross-family production comparisons. Token-KL is rejected because the tokenizer/vocabulary and chat-template axes are not aligned."
+      ]
+    }
+  ],
+  "metric_applicability": {
+    "drift_pairs": {
+      "persona_adherence": "primary_relative_metric",
+      "behavioral_consistency_f1": "primary_field_level_metric",
+      "token_kl": "conditional_canonical_possible_after_aligned_fixed_continuation_scoring_proof"
+    },
+    "standalone_instruct_models": {
+      "persona_adherence": "primary_relative_metric",
+      "behavioral_consistency_f1": "primary_field_level_metric",
+      "token_kl": "not_applicable_without_explicit_paired_baseline"
+    },
+    "cross_family_comparisons": {
+      "persona_adherence": "primary_relative_metric",
+      "behavioral_consistency_f1": "primary_field_level_metric",
+      "token_kl": "not_applicable_cross_family_rejected"
+    }
+  },
+  "notes": [
+    "Model IDs are examples, not hard-coded harness requirements.",
+    "Do not use this file to start a run while template_status is template_with_placeholders or real_run_ready is false.",
+    "Missing endpoint and revision/hash placeholders intentionally block real-run readiness.",
+    "Cross-family production comparisons are PA/BC-F1 only unless a future reviewed exception proves aligned Token-KL constraints."
+  ]
+}
