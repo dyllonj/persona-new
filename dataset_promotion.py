@@ -101,8 +101,8 @@ def _empty_report(
             "pii_or_real_person_findings": 0,
             "restricted_role_findings": 0,
             "semantic_embedding_cluster_review": (
-                "not_available_in_current_sprint5_infrastructure; "
-                "promotion remains blocked before this could pass"
+                "not_available_in_deterministic_infrastructure; "
+                "manual full-review evidence is required before promotion"
             ),
         },
         "validator_versions": {
