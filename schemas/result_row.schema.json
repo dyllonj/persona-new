@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/result_row.schema.json",
+  "title": "Result Row",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "run_id",
+    "persona_id",
+    "variant_id",
+    "variant_type",
+    "seed",
+    "prompt_text",
+    "system_prompt",
+    "prompt_hash",
+    "system_prompt_hash",
+    "model_pair",
+    "base",
+    "tuned",
+    "behavior_tags",
+    "metrics",
+    "flags"
+  ],
+  "properties": {
+    "base": {
+      "$ref": "#/$defs/model_output"
+    },
+    "tuned": {
+      "$ref": "#/$defs/model_output"
+    }
+  },
+  "$defs": {
+    "model_output": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "response_text",
+        "raw_request",
+        "stop_reason",
+        "truncation_flag",
+        "usage",
+        "latency_s",
+        "raw_response"
+      ]
+    }
+  }
+}

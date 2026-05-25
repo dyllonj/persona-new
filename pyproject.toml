@@ -1,0 +1,16 @@
+[project]
+name = "persona-new"
+version = "0.1.0"
+description = "Persona drift evaluation planning and autoresearch control plane"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "jsonschema>=4.0",
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

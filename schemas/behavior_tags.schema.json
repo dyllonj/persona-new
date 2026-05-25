@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/behavior_tags.schema.json",
+  "title": "Sprint 0 Behavior Tags",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stance", "primary_action", "secondary_modifiers"],
+  "properties": {
+    "stance": {
+      "type": "string",
+      "minLength": 1
+    },
+    "primary_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "secondary_modifiers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/persona_item.schema.json",
+  "title": "Sprint 0 Persona Item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "persona_id",
+    "source",
+    "persona_spec",
+    "seed_prompt",
+    "expected_behavior",
+    "variants",
+    "annotation"
+  ],
+  "properties": {
+    "persona_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "source_url",
+        "license",
+        "license_url",
+        "split",
+        "source_persona_id",
+        "retrieved_at",
+        "revision_or_hash",
+        "modification_notes",
+        "redistribution_notes"
+      ],
+      "properties": {
+        "dataset": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "split": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_persona_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date"
+        },
+        "revision_or_hash": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "modification_notes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redistribution_notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "persona_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "facts", "traits", "forbidden_behaviors"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "facts": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "traits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tone", "style", "values"],
+          "properties": {
+            "tone": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "style": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "forbidden_behaviors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "seed_prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_id", "text", "intent", "topic"],
+      "properties": {
+        "prompt_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "expected_behavior": {
+      "$ref": "#/$defs/behavior_labels"
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/variant"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "canonical"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "paraphrase"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "negation_preserving"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "distractor"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "instruction_prefix"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "type": {
+                "const": "temperature_robust"
+              }
+            },
+            "required": ["type"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gold_labels", "safety_class", "review_status"],
+      "properties": {
+        "gold_labels": {
+          "$ref": "#/$defs/behavior_labels"
+        },
+        "safety_class": {
+          "type": "string",
+          "const": "benign"
+        },
+        "review_status": {
+          "type": "string",
+          "enum": ["fixture_reviewed", "validated"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "behavior_labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stance", "primary_action", "secondary_modifiers"],
+      "properties": {
+        "stance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "primary_action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "secondary_modifiers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_id", "type", "text"],
+      "properties": {
+        "variant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "canonical",
+            "paraphrase",
+            "negation_preserving",
+            "distractor",
+            "instruction_prefix",
+            "temperature_robust"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "equivalence_status": {
+              "type": "string",
+              "enum": ["manual_fixture_check"]
+            }
+          }
+        },
+        "distractor_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["category"]
+        },
+        "prefix_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "style": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["style"]
+        },
+        "generation_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "generator": {
+              "type": "string",
+              "const": "human_fixture_author"
+            },
+            "selected_from": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": ["generator", "selected_from"]
+        }
+      }
+    }
+  }
+}
