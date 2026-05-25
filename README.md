@@ -5,8 +5,9 @@
 This repository is a fixture-first persona-drift evaluation harness. The current
 implemented path validates the 10-row sample dataset, plans generation counts,
 runs deterministic local mock outputs, and aggregates mock results at the
-persona level. It is not ready to generate the 200-persona full dataset or run a
-4,800-call full benchmark.
+persona level. Sprint 5 adds deterministic readiness validators, review
+manifests, and report schemas. It is still not ready to generate the
+200-persona full dataset or run a 4,800-call full benchmark.
 
 ## Setup
 
@@ -25,12 +26,14 @@ external services.
 python3 -m unittest discover -s tests
 python3 -m pytest
 python3 persona_eval.py validate --persona-path data/personas.sample.jsonl
+python3 dataset_readiness.py --persona-path data/personas.sample.jsonl --review-manifest reviews/personas.sample.review.jsonl
 ```
 
 Expected validation output:
 
 ```text
 valid_persona_rows=10
+dataset_readiness=blocked
 ```
 
 ## Planning Commands
@@ -69,7 +72,7 @@ Correct run counts:
 ## Mock Run
 
 ```bash
-python3 persona_eval.py run --persona-path data/personas.sample.jsonl --out results/sprint4_mock --adapter mock --model-base base --model-tuned tuned --seeds 1 --run-id sprint4_mock
+python3 persona_eval.py run --persona-path data/personas.sample.jsonl --out results/sprint5_mock --adapter mock --model-base base --model-tuned tuned --seeds 1 --run-id sprint5_mock
 ```
 
 Expected output includes:
@@ -77,8 +80,8 @@ Expected output includes:
 ```text
 planned_generation_calls=120
 written_result_rows=60
-manifest_path=results/sprint4_mock/manifest.json
-results_path=results/sprint4_mock/results.jsonl
+manifest_path=results/sprint5_mock/manifest.json
+results_path=results/sprint5_mock/results.jsonl
 ```
 
 The result row count is `10 personas * 6 variants * 1 seed = 60` because each
@@ -87,22 +90,22 @@ row contains the matched base/tuned pair.
 ## Aggregation
 
 ```bash
-python3 aggregate.py --manifest results/sprint4_mock/manifest.json --results results/sprint4_mock/results.jsonl --out reports/sprint4_mock
+python3 aggregate.py --manifest results/sprint5_mock/manifest.json --results results/sprint5_mock/results.jsonl --out reports/sprint5_mock
 ```
 
 Expected output includes:
 
 ```text
-aggregate_report_path=/Users/dyllon/Documents/persona-new/reports/sprint4_mock/aggregate_report.json
+aggregate_report_path=/Users/dyllon/Documents/persona-new/reports/sprint5_mock/aggregate_report.json
 full_dataset_readiness=blocked
 ```
 
 Aggregation writes:
 
-- `reports/sprint4_mock/aggregate_report.json`
-- `reports/sprint4_mock/chart_data/metric_availability.csv`
-- `reports/sprint4_mock/chart_data/persona_shape.csv`
-- `reports/sprint4_mock/chart_data/variant_type_breakdown.csv`
+- `reports/sprint5_mock/aggregate_report.json`
+- `reports/sprint5_mock/chart_data/metric_availability.csv`
+- `reports/sprint5_mock/chart_data/persona_shape.csv`
+- `reports/sprint5_mock/chart_data/variant_type_breakdown.csv`
 
 The report uses `persona_id` as the inference unit. Variants and seeds are
 averaged inside each persona before cross-persona confidence intervals, deltas,
@@ -129,20 +132,58 @@ backend, contradiction judge, and calibration fixture are pinned.
 ## Full Dataset Gate
 
 Do not create `data/personas.full.jsonl` until the readiness report is `ready`.
-The gate remains blocked until these have evidence:
+Run the readiness gate directly with:
+
+```bash
+python3 dataset_readiness.py --persona-path data/personas.sample.jsonl --review-manifest reviews/personas.sample.review.jsonl
+```
+
+Sprint 5 implements concrete local checks for:
 
 - Sample schema tests pass.
 - Variant validation tests pass.
 - Source/license checks pass.
-- PII and real-person filters exist.
-- Restricted-role filters exist.
-- Semantic equivalence validation exists.
-- NLI contradiction/equivalence checks exist, or review evidence exists.
-- Gold-label preview checks exist.
-- Exact, near-duplicate, and embedding-cluster dedupe checks exist.
-- Human-review manifest or metadata exists.
-- All low-confidence rows and at least 10 percent of rows have review evidence.
+- PII and known-real-person indicators.
+- Restricted-role indicators for real-person personas, medical decision roles,
+  legal guarantee roles, self-harm roles, extremist roles, fraud/deception
+  roles, and credential impersonation roles.
+- Gold-label preview consistency between `expected_behavior` and
+  `annotation.gold_labels`.
+- Normalized exact duplicate detection.
+- Deterministic near-duplicate detection using string similarity.
+- Candidate boundary checks that block unexpected candidate/full files under
+  `data/`.
+- Review manifest schema validation.
+- Low-confidence review coverage checks.
 - Unvalidated candidates remain outside `data/`.
+
+The review manifest is JSONL. Each row is validated by
+`schemas/review_manifest.schema.json` and must include:
+
+- `persona_id`
+- `reviewer`
+- `review_status`
+- `reviewed_at`
+- `review_reason`
+- `low_confidence_flags`
+- `semantic_equivalence_status`
+- `nli_equivalence_status`
+- `contradiction_status`
+- `safety_review_status`
+- `gold_label_review_status`
+
+The current sample manifest is `reviews/personas.sample.review.jsonl`. It is a
+contract fixture, not full-dataset approval evidence.
+
+Full dataset generation is still blocked because semantic equivalence, NLI
+equivalence, contradiction checks, embedding-cluster dedupe review, and
+full-dataset review coverage remain `manual_required` or sample-scoped. These
+states are intentional; mock or fixture checks must not be promoted to real
+semantic validation.
+
+Unvalidated candidate pools must stay outside `data/`. Use `candidates/` for
+local candidate pools; it is ignored by git. Do not commit candidate pools or
+`data/personas.full.jsonl` without explicit approval.
 
 ## Full Run Gate
 
@@ -153,8 +194,8 @@ are capped at 20 personas.
 ## Autoresearch Verification
 
 ```bash
-python3 auto_research.py run-once --tag sprint4 --description "Sprint 4 verification" -- python3 -m unittest discover -s tests
-python3 auto_research.py summarize --tag sprint4
+python3 auto_research.py run-once --tag sprint5 --description "Sprint 5 verification" -- python3 -m unittest discover -s tests
+python3 auto_research.py summarize --tag sprint5
 ```
 
 Autoresearch logs are local verification artifacts and are ignored by git.
@@ -162,7 +203,19 @@ Autoresearch logs are local verification artifacts and are ignored by git.
 ## Known Limitations
 
 - MockAdapter output is deterministic plumbing output, not a model benchmark.
-- Full-dataset validators and human-review evidence are incomplete.
+- Full-dataset semantic/NLI validators and full-scope human-review evidence are
+  incomplete.
 - Token-KL has no canonical value for mock runs because aligned scoring is not
   available.
 - PA is not real until pinned semantic and contradiction backends are added.
+
+## Exact Next Command
+
+After Sprint 5, the next implementation command is:
+
+```bash
+python3 dataset_readiness.py --persona-path data/personas.sample.jsonl --review-manifest reviews/personas.sample.review.jsonl --json
+```
+
+Use the JSON output to close the remaining `manual_required` gates before any
+full dataset generation starts.

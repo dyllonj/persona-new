@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/review_manifest.schema.json",
+  "title": "Sprint 5 Persona Review Manifest Row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "persona_id",
+    "reviewer",
+    "review_status",
+    "reviewed_at",
+    "review_reason",
+    "low_confidence_flags",
+    "semantic_equivalence_status",
+    "nli_equivalence_status",
+    "contradiction_status",
+    "safety_review_status",
+    "gold_label_review_status"
+  ],
+  "properties": {
+    "persona_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_status": {
+      "type": "string",
+      "enum": ["approved", "sample_reviewed", "needs_revision", "rejected"]
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "low_confidence_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "semantic_equivalence_status": {
+      "$ref": "#/$defs/review_gate_status"
+    },
+    "nli_equivalence_status": {
+      "$ref": "#/$defs/review_gate_status"
+    },
+    "contradiction_status": {
+      "$ref": "#/$defs/review_gate_status"
+    },
+    "safety_review_status": {
+      "$ref": "#/$defs/review_gate_status"
+    },
+    "gold_label_review_status": {
+      "$ref": "#/$defs/review_gate_status"
+    }
+  },
+  "$defs": {
+    "review_gate_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reviewer_override", "evidence"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["passed", "manual_pass", "manual_required", "blocked", "not_run", "failed"]
+        },
+        "reviewer_override": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

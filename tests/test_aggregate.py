@@ -231,7 +231,10 @@ class AggregateTests(unittest.TestCase):
         readiness = aggregate.full_dataset_readiness()
 
         self.assertEqual(readiness["status"], "blocked")
-        self.assertIn("pii_and_real_person_filters_exist", readiness["blocking_checks"])
+        self.assertEqual(readiness["checks"]["pii_and_real_person_filters_exist"]["status"], "pass")
+        self.assertEqual(readiness["checks"]["restricted_role_filters_exist"]["status"], "pass")
+        self.assertIn("semantic_equivalence_validation_exists", readiness["blocking_checks"])
+        self.assertIn("nli_contradiction_equivalence_checks_exist", readiness["blocking_checks"])
         self.assertIn("human_review_coverage_sufficient", readiness["blocking_checks"])
         self.assertEqual(readiness["checks"]["source_license_checks_pass"]["status"], "pass")
 
@@ -242,6 +245,7 @@ class AggregateTests(unittest.TestCase):
         )
         output_delta = report["paired_output_deltas"]["numeric_deltas"]["total_tokens"]
 
+        aggregate.validate_aggregate_report(report)
         self.assertIn("effect_size", output_delta)
         self.assertIn("p_value", output_delta)
         self.assertIn("reason_code", output_delta["effect_size"])
@@ -279,11 +283,15 @@ class AggregateTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn(
-            "python3 persona_eval.py run --persona-path data/personas.sample.jsonl --out results/sprint4_mock --adapter mock --model-base base --model-tuned tuned --seeds 1 --run-id sprint4_mock",
+            "python3 persona_eval.py run --persona-path data/personas.sample.jsonl --out results/sprint5_mock --adapter mock --model-base base --model-tuned tuned --seeds 1 --run-id sprint5_mock",
             readme,
         )
         self.assertIn(
-            "python3 aggregate.py --manifest results/sprint4_mock/manifest.json --results results/sprint4_mock/results.jsonl --out reports/sprint4_mock",
+            "python3 aggregate.py --manifest results/sprint5_mock/manifest.json --results results/sprint5_mock/results.jsonl --out reports/sprint5_mock",
+            readme,
+        )
+        self.assertIn(
+            "python3 dataset_readiness.py --persona-path data/personas.sample.jsonl --review-manifest reviews/personas.sample.review.jsonl",
             readme,
         )
         self.assertIn(

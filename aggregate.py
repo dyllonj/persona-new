@@ -14,20 +14,22 @@ import random
 import sys
 from typing import Any
 
+from dataset_readiness import READINESS_CHECKS, full_dataset_readiness_report
 from persona_eval import (
     PERSONA_SCHEMA_PATH,
     PersonaValidationError,
     hash_file_bytes,
     load_jsonl,
-    validate_personas,
+    validate_schema_file,
     validate_result_row,
     validate_run_manifest,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-AGGREGATION_VERSION = "sprint4"
-REPORT_SCHEMA_VERSION = "aggregate_report_v1"
+AGGREGATE_REPORT_SCHEMA_PATH = REPO_ROOT / "schemas" / "aggregate_report.schema.json"
+AGGREGATION_VERSION = "sprint5"
+REPORT_SCHEMA_VERSION = "aggregate_report_v2"
 BC_F1_FIELDS = (
     "stance_exact",
     "primary_action_exact",
@@ -39,21 +41,6 @@ OUTPUT_DELTA_FIELDS = (
     ("total_tokens", ("usage", "total_tokens")),
     ("latency_s", ("latency_s",)),
 )
-READINESS_CHECKS = (
-    "sample_schema_tests_pass",
-    "variant_validation_tests_pass",
-    "source_license_checks_pass",
-    "pii_and_real_person_filters_exist",
-    "restricted_role_filters_exist",
-    "semantic_equivalence_validation_exists",
-    "nli_contradiction_equivalence_checks_exist",
-    "gold_label_preview_checks_exist",
-    "dedupe_checks_exist",
-    "human_review_manifest_or_metadata_exists",
-    "human_review_coverage_sufficient",
-    "unvalidated_candidates_outside_data",
-)
-
 
 def not_applicable(reason_code: str, **extra: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {"status": "not_applicable", "reason_code": reason_code}
@@ -550,98 +537,7 @@ def readiness_status(status: str, reason_code: str | None, evidence: str | None 
 
 
 def full_dataset_readiness() -> dict[str, Any]:
-    checks: dict[str, dict[str, Any]] = {}
-
-    sample_path = REPO_ROOT / "data" / "personas.sample.jsonl"
-    try:
-        validate_personas(sample_path)
-        sample_validation_passed = True
-    except Exception as exc:  # pragma: no cover - defensive reporting path.
-        sample_validation_passed = False
-        sample_error = str(exc)
-    else:
-        sample_error = None
-
-    checks["sample_schema_tests_pass"] = (
-        readiness_status("pass", None, "data/personas.sample.jsonl validates against schemas")
-        if sample_validation_passed and (REPO_ROOT / "tests" / "test_schema.py").exists()
-        else readiness_status("blocked", "sample_schema_validation_missing_or_failing", sample_error)
-    )
-    checks["variant_validation_tests_pass"] = (
-        readiness_status("pass", None, "tests/test_variants.py exists and sample variant validation passes")
-        if sample_validation_passed and (REPO_ROOT / "tests" / "test_variants.py").exists()
-        else readiness_status("blocked", "variant_validation_missing_or_failing", sample_error)
-    )
-    checks["source_license_checks_pass"] = (
-        readiness_status("pass", None, "source/license metadata is validated for current sample rows")
-        if sample_validation_passed and PERSONA_SCHEMA_PATH.exists()
-        else readiness_status("blocked", "source_license_validation_missing_or_failing", sample_error)
-    )
-    checks["pii_and_real_person_filters_exist"] = readiness_status(
-        "blocked",
-        "missing_pii_and_real_person_filters",
-        "No implemented full-dataset PII or real-person impersonation filter was found.",
-    )
-    checks["restricted_role_filters_exist"] = readiness_status(
-        "blocked",
-        "missing_restricted_role_filters",
-        "No implemented filter for real-person, medical, legal, self-harm, extremist, fraud, or credential roles was found.",
-    )
-    checks["semantic_equivalence_validation_exists"] = readiness_status(
-        "blocked",
-        "manual_fixture_checks_only",
-        "Sample variants carry manual_fixture_check metadata, but no full-dataset semantic equivalence validator or review evidence exists.",
-    )
-    checks["nli_contradiction_equivalence_checks_exist"] = readiness_status(
-        "blocked",
-        "missing_nli_or_review_evidence",
-        "Mock NLI plumbing exists for PA, but no full-dataset NLI contradiction/equivalence check or review manifest exists.",
-    )
-    checks["gold_label_preview_checks_exist"] = readiness_status(
-        "blocked",
-        "missing_gold_label_preview_pipeline",
-        "Rule-first extraction exists, but no dataset-level gold-label preview check is implemented.",
-    )
-    checks["dedupe_checks_exist"] = readiness_status(
-        "blocked",
-        "missing_dedupe_checks",
-        "No exact, near-duplicate, or embedding-cluster dedupe workflow is implemented.",
-    )
-    checks["human_review_manifest_or_metadata_exists"] = readiness_status(
-        "blocked",
-        "missing_human_review_manifest",
-        "Sample rows have fixture review_status only; no reviewer/reviewed_at/review_reason manifest exists.",
-    )
-    checks["human_review_coverage_sufficient"] = readiness_status(
-        "blocked",
-        "missing_human_review_coverage_evidence",
-        "No evidence covers all low-confidence rows and at least 10 percent of the full dataset.",
-    )
-
-    data_files = sorted(path.name for path in (REPO_ROOT / "data").glob("*") if path.is_file())
-    unexpected_candidates = [
-        name
-        for name in data_files
-        if name != "personas.sample.jsonl" and not name.endswith(".schema.json")
-    ]
-    checks["unvalidated_candidates_outside_data"] = (
-        readiness_status("pass", None, "No full or candidate persona dataset is present under data/.")
-        if not unexpected_candidates
-        else readiness_status(
-            "blocked",
-            "unvalidated_candidates_present_under_data",
-            ", ".join(unexpected_candidates),
-        )
-    )
-
-    overall = "ready" if all(check["status"] == "pass" for check in checks.values()) else "blocked"
-    missing = [name for name in READINESS_CHECKS if checks[name]["status"] != "pass"]
-    return {
-        "status": overall,
-        "checks": {name: checks[name] for name in READINESS_CHECKS},
-        "blocking_checks": missing,
-        "note": "Full dataset generation must stay blocked until every check passes with evidence.",
-    }
+    return full_dataset_readiness_report()
 
 
 def statistical_method_notes() -> dict[str, Any]:
@@ -715,12 +611,17 @@ def build_report(
             "Full dataset generation remains blocked until readiness checks pass.",
         ],
     }
+    validate_aggregate_report(report)
     return report
 
 
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+
+def validate_aggregate_report(report: dict[str, Any]) -> None:
+    validate_schema_file(report, AGGREGATE_REPORT_SCHEMA_PATH)
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
@@ -774,6 +675,7 @@ def write_chart_data(report: dict[str, Any], out_dir: Path) -> dict[str, str]:
 
 
 def write_report(report: dict[str, Any], out_dir: str | Path) -> dict[str, str]:
+    validate_aggregate_report(report)
     out_path = Path(out_dir)
     if not out_path.is_absolute():
         out_path = REPO_ROOT / out_path

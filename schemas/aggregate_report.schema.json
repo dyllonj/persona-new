@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/aggregate_report.schema.json",
+  "title": "Sprint 5 Aggregate Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "report_schema_version",
+    "aggregation_version",
+    "run_id",
+    "source_manifest_hash",
+    "source_results_hash",
+    "availability_summaries",
+    "metric_summaries",
+    "paired_output_deltas",
+    "statistical_method_notes",
+    "full_dataset_readiness"
+  ],
+  "properties": {
+    "report_schema_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aggregation_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_manifest_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "source_results_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "availability_summaries": {
+      "type": "object",
+      "required": ["behavioral_consistency_f1", "persona_adherence", "token_kl"]
+    },
+    "metric_summaries": {
+      "type": "object",
+      "required": ["behavioral_consistency_f1", "persona_adherence", "token_kl"]
+    },
+    "paired_output_deltas": {
+      "type": "object",
+      "required": ["numeric_deltas", "truncation_pass_fail_mcnemar"],
+      "properties": {
+        "numeric_deltas": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": ["status", "effect_size", "p_value"],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["ok", "not_applicable"]
+              },
+              "effect_size": {
+                "$ref": "#/$defs/statistical_result"
+              },
+              "p_value": {
+                "$ref": "#/$defs/statistical_result"
+              }
+            }
+          }
+        }
+      }
+    },
+    "statistical_method_notes": {
+      "type": "object",
+      "required": ["inference_unit", "multiple_comparison_note"],
+      "properties": {
+        "inference_unit": {
+          "const": "persona_id"
+        },
+        "multiple_comparison_note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "full_dataset_readiness": {
+      "type": "object",
+      "required": ["status", "checks", "blocking_checks"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ready", "blocked"]
+        },
+        "checks": {
+          "type": "object",
+          "minProperties": 1
+        },
+        "blocking_checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "statistical_result": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "not_applicable"]
+        },
+        "value": {
+          "type": ["number", "null"]
+        },
+        "reason_code": {
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}
