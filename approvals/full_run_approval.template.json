@@ -1,0 +1,41 @@
+{
+  "approval_type": "full_run_approval",
+  "status": "<replace-with-approved-only-after-review>",
+  "approved_by": "<human-approver-name-or-handle>",
+  "approved_at": "<UTC-ISO-8601-timestamp>",
+  "persona_count": 200,
+  "variants_per_persona": 6,
+  "model_count": 2,
+  "seed_count": 2,
+  "planned_generation_calls": 4800,
+  "dataset_path": "data/personas.full.jsonl",
+  "dataset_hash": "<sha256-of-data/personas.full.jsonl>",
+  "promotion_manifest_path": "reports/dataset_promotion_manifest.json",
+  "promotion_manifest_hash": "<sha256-of-promotion-manifest>",
+  "review_manifest_path": "reviews/personas.full.review.jsonl",
+  "review_manifest_hash": "<sha256-of-full-review-manifest>",
+  "smoke_evidence_path": "reports/vllm_smoke_20/smoke_evidence.json",
+  "smoke_evidence_hash": "<sha256-of-smoke-evidence>",
+  "dev_evidence_path": "reports/dev_50/dev_evidence.json",
+  "dev_evidence_hash": "<sha256-of-dev-evidence>",
+  "model_pair_config_path": "configs/model_pair.qwen2_5_7b.json",
+  "required_runtime_values": {
+    "model_base": "Qwen/Qwen2.5-7B",
+    "model_tuned": "Qwen/Qwen2.5-7B-Instruct",
+    "model_base_revision_or_hash": "<fill-from-gpu-host>",
+    "model_tuned_revision_or_hash": "<fill-from-gpu-host>",
+    "tokenizer_name": "<fill-from-gpu-host>",
+    "tokenizer_hash": "<fill-from-gpu-host>",
+    "chat_template_hash": "<fill-from-gpu-host>",
+    "serving_stack_version": "<fill-from-gpu-host>",
+    "gpu_cuda_driver": "<fill-from-gpu-host>"
+  },
+  "approval_basis": [
+    "Dataset validation and readiness passed on the exact dataset hash above.",
+    "Sprint 8 smoke evidence and Sprint 9 dev evidence passed.",
+    "Dev-run error, truncation, ambiguity, and flag rates were reviewed.",
+    "Full-run cost, wall-clock estimate, and rollback plan were reviewed.",
+    "No staged caps or approval gates were weakened."
+  ],
+  "placeholder_warning": "This template is not approval evidence. Replace every angle-bracket value and set status to approved only after human review."
+}

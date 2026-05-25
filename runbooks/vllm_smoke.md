@@ -23,6 +23,7 @@ planned_generation_calls=240
 - `data/personas.full.jsonl` exists and validates.
 - Sprint 7 promotion manifest path is known and hashable.
 - Local vLLM OpenAI-compatible endpoint is already running.
+- If base and tuned models use separate servers, both local endpoints are known.
 - Base and tuned model IDs are explicit provider/runtime model IDs.
 - Base and tuned model revisions or hashes are recorded.
 - Tokenizer name/path and tokenizer hash are recorded.
@@ -60,10 +61,24 @@ python3 persona_eval.py run \
   --run-id vllm_smoke_20
 ```
 
+If the base and tuned models are served from separate local endpoints, replace
+`--base-url` with:
+
+```bash
+  --base-url-base http://localhost:8001/v1 \
+  --base-url-tuned http://localhost:8002/v1 \
+```
+
 Then aggregate only if the smoke run wrote a valid manifest and results file:
 
 ```bash
 python3 aggregate.py --manifest results/vllm_smoke_20/manifest.json --results results/vllm_smoke_20/results.jsonl --out reports/vllm_smoke_20
+```
+
+Then build the smoke evidence artifact required by the dev/full gates:
+
+```bash
+python3 smoke_evidence.py --manifest results/vllm_smoke_20/manifest.json --results results/vllm_smoke_20/results.jsonl --aggregate-report reports/vllm_smoke_20/aggregate_report.json --out reports/vllm_smoke_20/smoke_evidence.json
 ```
 
 ## Manifest Checks
@@ -74,6 +89,8 @@ for:
 - `persona_jsonl_hash`
 - `promotion_manifest_hash`
 - base/tuned model IDs and revisions
+- `model_endpoints.base.provider_or_endpoint`
+- `model_endpoints.tuned.provider_or_endpoint`
 - tokenizer name and hash
 - chat-template hash
 - serving stack and version
@@ -102,3 +119,4 @@ Stop before real execution if:
 - The requested persona limit is above 20.
 - Raw request/response logging would be disabled.
 - The code attempts to report canonical Token-KL without proven aligned scoring.
+- `smoke_evidence.py` fails to produce `reports/vllm_smoke_20/smoke_evidence.json`.
