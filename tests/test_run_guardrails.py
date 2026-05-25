@@ -98,6 +98,65 @@ def write_full_review_manifest(path, persona_rows):
     write_jsonl(path, review_rows)
 
 
+def write_promotion_manifest(path, persona_path):
+    dataset_hash = hash_file_bytes(persona_path)
+    path.write_text(
+        json.dumps(
+            {
+                "manifest_type": "dataset_promotion",
+                "status": "promoted",
+                "persona_count": 200,
+                "dataset_hash": dataset_hash,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return dataset_hash
+
+
+def write_dev_run_approval(path, dataset_hash, approval_type="dev_run_approval"):
+    path.write_text(
+        json.dumps(
+            {
+                "approval_type": approval_type,
+                "status": "approved",
+                "approved_by": "guardrail_test_approver",
+                "approved_at": "2026-05-25T00:00:00Z",
+                "persona_count": 50,
+                "planned_generation_calls": 1200,
+                "dataset_hash": dataset_hash,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_full_run_approval(path, dataset_hash):
+    path.write_text(
+        json.dumps(
+            {
+                "approval_type": "full_run_approval",
+                "status": "approved",
+                "approved_by": "guardrail_test_approver",
+                "approved_at": "2026-05-25T00:00:00Z",
+                "persona_count": 200,
+                "planned_generation_calls": 4800,
+                "dataset_hash": dataset_hash,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class RunGuardrailTests(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run(
@@ -138,31 +197,159 @@ class RunGuardrailTests(unittest.TestCase):
         self.assertEqual(full.returncode, 0, full.stderr)
         self.assertEqual(full.stdout, "planned_generation_calls=4800\n")
 
-    def test_dev_preflight_blocks_without_smoke_evidence(self):
-        completed = self.run_cli(
-            "preflight",
-            "--stage",
+    def test_dev_and_full_dry_run_counts_cli(self):
+        dev = self.run_cli(
+            "run",
+            "--run-stage",
             "dev",
             "--persona-count",
             "50",
             "--variants-per-persona",
             "6",
-            "--model-count",
-            "2",
-            "--seed-count",
-            "2",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "tuned",
+            "--seeds",
+            "1,2",
+            "--dry-run",
         )
+        full = self.run_cli(
+            "run",
+            "--run-stage",
+            "full",
+            "--persona-count",
+            "200",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "tuned",
+            "--seeds",
+            "1,2",
+            "--dry-run",
+        )
+
+        self.assertEqual(dev.returncode, 0, dev.stderr)
+        self.assertEqual(dev.stdout, "planned_generation_calls=1200\n")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertEqual(full.stdout, "planned_generation_calls=4800\n")
+
+    def test_explicit_phase_dry_run_caps(self):
+        dev = self.run_cli(
+            "run",
+            "--run-stage",
+            "dev",
+            "--persona-count",
+            "51",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "tuned",
+            "--seeds",
+            "1,2",
+            "--dry-run",
+        )
+        full = self.run_cli(
+            "run",
+            "--run-stage",
+            "full",
+            "--persona-count",
+            "201",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "tuned",
+            "--seeds",
+            "1,2",
+            "--dry-run",
+        )
+        auto = self.run_cli(
+            "run",
+            "--persona-count",
+            "50",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "tuned",
+            "--seeds",
+            "1,2",
+            "--dry-run",
+        )
+
+        self.assertNotEqual(dev.returncode, 0)
+        self.assertIn("dev run execution is capped at 50 personas", dev.stderr)
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn("full run execution is capped at 200 personas", full.stderr)
+        self.assertNotEqual(auto.returncode, 0)
+        self.assertIn("staged run execution is capped at 20 personas", auto.stderr)
+
+    def test_dev_preflight_blocks_without_smoke_evidence(self):
+        rows = expanded_persona_rows(200)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            promotion_path = root / "dataset_promotion.json"
+            approval_path = root / "dev_run_approval.json"
+            write_jsonl(persona_path, rows)
+            dataset_hash = write_promotion_manifest(promotion_path, persona_path)
+            write_full_review_manifest(review_path, rows)
+            write_dev_run_approval(approval_path, dataset_hash)
+
+            completed = self.run_cli(
+                "preflight",
+                "--stage",
+                "dev",
+                "--persona-path",
+                str(persona_path),
+                "--limit-personas",
+                "50",
+                "--model-count",
+                "2",
+                "--seed-count",
+                "2",
+                "--promotion-manifest",
+                str(promotion_path),
+                "--review-manifest",
+                str(review_path),
+                "--dev-run-approval",
+                str(approval_path),
+            )
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("--smoke-evidence is required for dev preflight", completed.stderr)
 
     def test_dev_run_attempt_blocks_without_smoke_evidence(self):
-        rows = expanded_persona_rows(50)
+        rows = expanded_persona_rows(200)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            persona_path = root / "dev_personas.jsonl"
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            promotion_path = root / "dataset_promotion.json"
+            approval_path = root / "dev_run_approval.json"
             out = root / "dev_run"
             write_jsonl(persona_path, rows)
+            dataset_hash = write_promotion_manifest(promotion_path, persona_path)
+            write_full_review_manifest(review_path, rows)
+            write_dev_run_approval(approval_path, dataset_hash)
 
             completed = self.run_cli(
                 "run",
@@ -170,6 +357,117 @@ class RunGuardrailTests(unittest.TestCase):
                 "dev",
                 "--persona-path",
                 str(persona_path),
+                "--limit-personas",
+                "50",
+                "--out",
+                str(out),
+                "--adapter",
+                "mock",
+                "--model-base",
+                "base",
+                "--model-tuned",
+                "tuned",
+                "--promotion-manifest-path",
+                str(promotion_path),
+                "--review-manifest-path",
+                str(review_path),
+                "--dev-run-approval",
+                str(approval_path),
+                "--seeds",
+                "1,2",
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("--smoke-evidence is required for dev preflight", completed.stderr)
+            self.assertFalse(out.exists())
+
+    def test_dev_preflight_passes_with_required_artifacts(self):
+        rows = expanded_persona_rows(200)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            promotion_path = root / "dataset_promotion.json"
+            approval_path = root / "dev_run_approval.json"
+            write_jsonl(persona_path, rows)
+            dataset_hash = write_promotion_manifest(promotion_path, persona_path)
+            write_full_review_manifest(review_path, rows)
+            write_dev_run_approval(approval_path, dataset_hash)
+            smoke_evidence = write_run_evidence(root, "smoke", 20, 1, 240)
+
+            completed = self.run_cli(
+                "preflight",
+                "--stage",
+                "dev",
+                "--persona-path",
+                str(persona_path),
+                "--limit-personas",
+                "50",
+                "--model-count",
+                "2",
+                "--seed-count",
+                "2",
+                "--promotion-manifest",
+                str(promotion_path),
+                "--review-manifest",
+                str(review_path),
+                "--smoke-evidence",
+                str(smoke_evidence),
+                "--dev-run-approval",
+                str(approval_path),
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("preflight_stage=dev\n", completed.stdout)
+        self.assertIn("planned_generation_calls=1200\n", completed.stdout)
+        self.assertIn("preflight_status=pass\n", completed.stdout)
+
+    def test_dev_preflight_blocks_without_dev_approval_artifact(self):
+        rows = expanded_persona_rows(200)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            promotion_path = root / "dataset_promotion.json"
+            write_jsonl(persona_path, rows)
+            write_promotion_manifest(promotion_path, persona_path)
+            write_full_review_manifest(review_path, rows)
+            smoke_evidence = write_run_evidence(root, "smoke", 20, 1, 240)
+
+            completed = self.run_cli(
+                "preflight",
+                "--stage",
+                "dev",
+                "--persona-path",
+                str(persona_path),
+                "--limit-personas",
+                "50",
+                "--model-count",
+                "2",
+                "--seed-count",
+                "2",
+                "--promotion-manifest",
+                str(promotion_path),
+                "--review-manifest",
+                str(review_path),
+                "--smoke-evidence",
+                str(smoke_evidence),
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--dev-run-approval is required for dev preflight", completed.stderr)
+
+    def test_explicit_smoke_run_requires_promoted_dataset_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "smoke_run"
+            completed = self.run_cli(
+                "run",
+                "--run-stage",
+                "smoke",
+                "--persona-path",
+                str(SAMPLE_PATH),
+                "--limit-personas",
+                "10",
                 "--out",
                 str(out),
                 "--adapter",
@@ -179,34 +477,12 @@ class RunGuardrailTests(unittest.TestCase):
                 "--model-tuned",
                 "tuned",
                 "--seeds",
-                "1,2",
+                "1",
             )
 
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("--smoke-evidence is required for dev preflight", completed.stderr)
-            self.assertFalse(out.exists())
-
-    def test_dev_preflight_allows_explicit_smoke_override(self):
-        completed = self.run_cli(
-            "preflight",
-            "--stage",
-            "dev",
-            "--persona-count",
-            "50",
-            "--variants-per-persona",
-            "6",
-            "--model-count",
-            "2",
-            "--seed-count",
-            "2",
-            "--allow-dev-without-smoke-evidence",
-            "--approval-override-reason",
-            "operator accepted missing smoke evidence for fixture test",
-        )
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("planned_generation_calls=1200\n", completed.stdout)
-        self.assertIn("smoke_evidence_gate=explicitly_overridden\n", completed.stdout)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--promotion-manifest-path is required for smoke run", completed.stderr)
+        self.assertFalse(out.exists())
 
     def test_full_preflight_blocks_without_promotion_manifest(self):
         rows = expanded_persona_rows(200)
@@ -228,6 +504,50 @@ class RunGuardrailTests(unittest.TestCase):
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("--promotion-manifest is required for full preflight", completed.stderr)
+
+    def test_full_run_attempt_blocks_without_full_approval_artifact(self):
+        rows = expanded_persona_rows(200)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            promotion_path = root / "dataset_promotion.json"
+            out = root / "full_run"
+            write_jsonl(persona_path, rows)
+            write_promotion_manifest(promotion_path, persona_path)
+            write_full_review_manifest(review_path, rows)
+            smoke_evidence = write_run_evidence(root, "smoke", 20, 1, 240)
+            dev_evidence = write_run_evidence(root, "dev", 50, 2, 1200)
+
+            completed = self.run_cli(
+                "run",
+                "--run-stage",
+                "full",
+                "--persona-path",
+                str(persona_path),
+                "--out",
+                str(out),
+                "--adapter",
+                "mock",
+                "--model-base",
+                "base",
+                "--model-tuned",
+                "tuned",
+                "--promotion-manifest-path",
+                str(promotion_path),
+                "--review-manifest-path",
+                str(review_path),
+                "--smoke-evidence",
+                str(smoke_evidence),
+                "--dev-evidence",
+                str(dev_evidence),
+                "--seeds",
+                "1,2",
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--full-run-approval is required for full preflight", completed.stderr)
+        self.assertFalse(out.exists())
 
     def test_full_preflight_passes_with_required_artifacts_and_metadata(self):
         rows = expanded_persona_rows(200)

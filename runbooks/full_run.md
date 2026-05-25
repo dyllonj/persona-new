@@ -7,8 +7,8 @@ passes validation. The expected plan is exactly:
 
 `200 personas * 6 variants * 2 models * 2 seeds = 4,800 generation calls`.
 
-Current non-dry staged execution remains capped at 20 personas. Do not bypass
-that cap in this runbook.
+Non-dry execution is phase-capped: full may run at up to 200 personas only when
+`--run-stage full` is explicit and every full-run evidence gate passes.
 
 ## Required Inputs
 

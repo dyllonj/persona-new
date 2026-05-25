@@ -51,12 +51,19 @@ DEV_RUN_CALL_COUNT = 1200
 FULL_RUN_PERSONA_COUNT = 200
 FULL_RUN_SEED_COUNT = 2
 FULL_RUN_CALL_COUNT = 4800
+RUN_STAGE_PERSONA_CAPS = {
+    "auto": STAGED_RUN_MAX_PERSONAS,
+    "smoke": SMOKE_RUN_PERSONA_COUNT,
+    "dev": DEV_RUN_PERSONA_COUNT,
+    "full": FULL_RUN_PERSONA_COUNT,
+}
 PASSING_EVIDENCE_STATUSES = {"pass", "passed", "ok", "success", "completed", "approved"}
 RUN_EVIDENCE_REQUIRED_ARTIFACT_FIELDS = (
     "manifest_path",
     "results_path",
     "aggregate_report_path",
 )
+DEV_RUN_APPROVAL_TYPES = {"dev_run_approval", "dev_run_override"}
 FULL_REVIEW_GATE_FIELDS = (
     "semantic_equivalence_status",
     "nli_equivalence_status",
@@ -2089,27 +2096,82 @@ def _limited_rows(rows: list[dict[str, Any]], limit: int | None) -> list[dict[st
     return rows[:limit]
 
 
-def _enforce_staged_execution_cap(persona_count: int) -> None:
-    if persona_count > STAGED_RUN_MAX_PERSONAS:
-        raise PersonaValidationError(
-            f"staged run execution is capped at {STAGED_RUN_MAX_PERSONAS} personas; "
-            "use the plan command for larger arithmetic until the full-run gate exists"
-        )
+def _run_stage_from_args(args: argparse.Namespace) -> str:
+    return getattr(args, "run_stage", "auto") or "auto"
+
+
+def _enforce_phase_execution_cap(args: argparse.Namespace, persona_count: int) -> None:
+    stage = _run_stage_from_args(args)
+    cap = RUN_STAGE_PERSONA_CAPS.get(stage, STAGED_RUN_MAX_PERSONAS)
+    if persona_count <= cap:
+        return
+    label = "staged" if stage == "auto" else stage
+    if stage == "auto":
+        guidance = "use --run-stage dev/full with required evidence gates for larger runs"
+    else:
+        guidance = "reduce --limit-personas/--persona-count for this phase"
+    raise PersonaValidationError(
+        f"{label} run execution is capped at {cap} personas; {guidance}"
+    )
+
+
+def _promotion_manifest_arg(args: argparse.Namespace) -> str | None:
+    return getattr(args, "promotion_manifest", None) or getattr(args, "promotion_manifest_path", None)
+
+
+def _review_manifest_arg(args: argparse.Namespace) -> str | None:
+    return getattr(args, "review_manifest", None) or getattr(args, "review_manifest_path", None)
+
+
+def _dev_run_approval_arg(args: argparse.Namespace) -> str | None:
+    return getattr(args, "dev_run_approval", None)
+
+
+def _require_persona_path(args: argparse.Namespace, label: str) -> str:
+    persona_path = getattr(args, "persona_path", None)
+    if not persona_path:
+        raise PersonaValidationError(f"{label} requires --persona-path")
+    return persona_path
+
+
+def _require_promotion_and_review_gates(
+    args: argparse.Namespace,
+    *,
+    persona_rows: list[dict[str, Any]] | None = None,
+    label: str,
+) -> None:
+    persona_path = _require_persona_path(args, label)
+    promotion_manifest = _promotion_manifest_arg(args)
+    review_manifest = _review_manifest_arg(args)
+    if not promotion_manifest:
+        raise PersonaValidationError(f"--promotion-manifest is required for {label}")
+    if not review_manifest:
+        raise PersonaValidationError(f"--review-manifest is required for {label}")
+    full_rows = persona_rows if persona_rows is not None else validate_personas(persona_path)
+    validate_dataset_promotion_manifest(promotion_manifest, persona_path=persona_path)
+    validate_full_review_manifest(review_manifest, persona_rows=full_rows)
+
+
+def _require_smoke_promoted_dataset_gate(args: argparse.Namespace) -> None:
+    persona_path = _require_persona_path(args, "smoke run")
+    promotion_manifest = _promotion_manifest_arg(args)
+    if not promotion_manifest:
+        raise PersonaValidationError("--promotion-manifest-path is required for smoke run")
+    validate_dataset_promotion_manifest(promotion_manifest, persona_path=persona_path)
 
 
 def _is_missing_explicit_metadata(value: str | None) -> bool:
     return value is None or not value.strip() or value.strip() == "not_available"
 
 
-def _require_real_adapter_run_contract(args: argparse.Namespace, persona_count: int) -> None:
+def _require_real_adapter_run_contract(args: argparse.Namespace) -> None:
     if args.adapter not in REAL_HTTP_ADAPTERS or args.dry_run:
         return
-    _enforce_staged_execution_cap(persona_count)
     expected_full_path = (REPO_ROOT / "data" / "personas.full.jsonl").resolve()
     actual_path = Path(args.persona_path).resolve() if args.persona_path else None
     if actual_path != expected_full_path:
         raise PersonaValidationError(
-            "real vLLM/openai-compatible smoke runs require "
+            "real vLLM/openai-compatible runs require "
             "--persona-path data/personas.full.jsonl after Sprint 7 promotion"
         )
     missing = [
@@ -2286,6 +2348,29 @@ def validate_full_run_approval(
     return payload
 
 
+def validate_dev_run_approval(
+    path: str | Path,
+    *,
+    persona_path: str | Path,
+) -> dict[str, Any]:
+    payload = _load_json_object(path, "dev-run approval")
+    if payload.get("approval_type") not in DEV_RUN_APPROVAL_TYPES:
+        allowed = ", ".join(sorted(DEV_RUN_APPROVAL_TYPES))
+        raise PersonaValidationError(f"dev-run approval.approval_type must be one of: {allowed}")
+    if payload.get("status") != "approved":
+        raise PersonaValidationError("dev-run approval.status must be approved")
+    for field in ("approved_by", "approved_at"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise PersonaValidationError(f"dev-run approval.{field} is required")
+    _require_int_field(payload, "persona_count", DEV_RUN_PERSONA_COUNT, "dev-run approval")
+    _require_int_field(payload, "planned_generation_calls", DEV_RUN_CALL_COUNT, "dev-run approval")
+    dataset_hash = hash_file_bytes(persona_path)
+    if payload.get("dataset_hash") != dataset_hash:
+        raise PersonaValidationError("dev-run approval.dataset_hash must match persona JSONL hash")
+    return payload
+
+
 def _require_plan_shape(
     *,
     stage: str,
@@ -2340,7 +2425,15 @@ def _preflight_shape(args: argparse.Namespace) -> tuple[list[dict[str, Any]] | N
         variant_counts = {len(row["variants"]) for row in rows}
         if len(variant_counts) != 1:
             raise PersonaValidationError("all persona rows must have the same variant count")
-        return rows, len(rows), variant_counts.pop()
+        persona_count = len(rows)
+        if args.limit_personas is not None:
+            if args.stage == "full":
+                raise PersonaValidationError("full preflight must not use --limit-personas")
+            limit = _validate_positive_int(args.limit_personas, "--limit-personas")
+            if limit > persona_count:
+                raise PersonaValidationError("--limit-personas cannot exceed validated persona row count")
+            persona_count = limit
+        return rows, persona_count, variant_counts.pop()
     if args.stage == "full":
         raise PersonaValidationError("full preflight requires --persona-path")
     persona_count = _validate_positive_int(args.persona_count, "--persona-count")
@@ -2348,7 +2441,13 @@ def _preflight_shape(args: argparse.Namespace) -> tuple[list[dict[str, Any]] | N
     return None, persona_count, variants_per_persona
 
 
-def validate_dev_preflight(args: argparse.Namespace, *, persona_count: int, variants_per_persona: int) -> int:
+def validate_dev_preflight(
+    args: argparse.Namespace,
+    *,
+    persona_count: int,
+    variants_per_persona: int,
+    persona_rows: list[dict[str, Any]] | None = None,
+) -> int:
     planned_calls = _require_plan_shape(
         stage="dev",
         persona_count=persona_count,
@@ -2356,16 +2455,12 @@ def validate_dev_preflight(args: argparse.Namespace, *, persona_count: int, vari
         model_count=args.model_count,
         seed_count=args.seed_count,
     )
-    if args.allow_dev_without_smoke_evidence:
-        if not args.approval_override_reason or not args.approval_override_reason.strip():
-            raise PersonaValidationError(
-                "--approval-override-reason is required with --allow-dev-without-smoke-evidence"
-            )
-        return planned_calls
+    _require_promotion_and_review_gates(args, persona_rows=persona_rows, label="dev preflight")
     if not args.smoke_evidence:
-        raise PersonaValidationError(
-            "--smoke-evidence is required for dev preflight unless --allow-dev-without-smoke-evidence is set"
-        )
+        raise PersonaValidationError("--smoke-evidence is required for dev preflight")
+    dev_run_approval = _dev_run_approval_arg(args)
+    if not dev_run_approval:
+        raise PersonaValidationError("--dev-run-approval is required for dev preflight")
     validate_run_evidence_file(
         args.smoke_evidence,
         expected_stage="smoke",
@@ -2373,6 +2468,7 @@ def validate_dev_preflight(args: argparse.Namespace, *, persona_count: int, vari
         expected_seed_count=SMOKE_RUN_SEED_COUNT,
         expected_call_count_value=SMOKE_RUN_CALL_COUNT,
     )
+    validate_dev_run_approval(dev_run_approval, persona_path=args.persona_path)
     return planned_calls
 
 
@@ -2430,10 +2526,10 @@ def _run_approval_stage(
     seed_count: int,
 ) -> str | None:
     explicit_stage = getattr(args, "run_stage", "auto")
-    if explicit_stage == "smoke":
-        return None
     if explicit_stage in {"dev", "full"}:
         return explicit_stage
+    if explicit_stage == "smoke":
+        return "smoke"
     if (
         persona_count == DEV_RUN_PERSONA_COUNT
         and variants_per_persona == RUN_VARIANTS_PER_PERSONA
@@ -2474,12 +2570,24 @@ def _enforce_run_approval_gates(
     )
     if stage is None:
         return
+    if stage == "smoke":
+        if variants_per_persona != RUN_VARIANTS_PER_PERSONA:
+            raise PersonaValidationError(f"smoke run requires variants_per_persona={RUN_VARIANTS_PER_PERSONA}")
+        if seed_count != SMOKE_RUN_SEED_COUNT:
+            raise PersonaValidationError(f"smoke run requires seed_count={SMOKE_RUN_SEED_COUNT}")
+        _require_smoke_promoted_dataset_gate(args)
+        return
     preflight_args = _run_args_for_preflight(args, seed_count=seed_count)
     if stage == "dev":
+        if args.persona_path:
+            persona_rows = validate_personas(args.persona_path)
+        else:
+            persona_rows = rows
         validate_dev_preflight(
             preflight_args,
             persona_count=persona_count,
             variants_per_persona=variants_per_persona,
+            persona_rows=persona_rows,
         )
         return
     if rows is None:
@@ -2786,6 +2894,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
             args,
             persona_count=persona_count,
             variants_per_persona=variants_per_persona,
+            persona_rows=rows,
         )
     else:
         if rows is None:
@@ -2799,8 +2908,6 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     print(f"preflight_stage={args.stage}")
     print(f"planned_generation_calls={planned_calls}")
     print("preflight_status=pass")
-    if args.stage == "dev" and args.allow_dev_without_smoke_evidence:
-        print("smoke_evidence_gate=explicitly_overridden")
     return 0
 
 
@@ -2813,6 +2920,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     rows, persona_count, variants_per_persona = _run_persona_shape(args)
     planned_calls = expected_call_count(persona_count, variants_per_persona, 2, len(seeds))
 
+    _enforce_phase_execution_cap(args, persona_count)
     if args.out:
         _run_output_dir(args)
     if not args.dry_run:
@@ -2825,11 +2933,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             variants_per_persona=variants_per_persona,
             seed_count=len(seeds),
         )
-    _enforce_staged_execution_cap(persona_count)
     if args.dry_run:
         print(f"planned_generation_calls={planned_calls}")
         return 0
-    _require_real_adapter_run_contract(args, persona_count)
+    _require_real_adapter_run_contract(args)
 
     output_dir = _run_output_dir(args)
     run_id = args.run_id or dt.datetime.now(dt.UTC).strftime("run-%Y%m%dT%H%M%SZ")
@@ -2913,6 +3020,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--stage", choices=["dev", "full"], required=True)
     preflight_parser.add_argument("--persona-path")
     preflight_parser.add_argument("--persona-count", type=int)
+    preflight_parser.add_argument("--limit-personas", type=int)
     preflight_parser.add_argument("--variants-per-persona", type=int)
     preflight_parser.add_argument("--model-count", type=int, default=RUN_MODEL_COUNT)
     preflight_parser.add_argument("--seed-count", type=int, required=True)
@@ -2920,9 +3028,8 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--dev-evidence")
     preflight_parser.add_argument("--promotion-manifest")
     preflight_parser.add_argument("--review-manifest")
+    preflight_parser.add_argument("--dev-run-approval")
     preflight_parser.add_argument("--full-run-approval")
-    preflight_parser.add_argument("--allow-dev-without-smoke-evidence", action="store_true")
-    preflight_parser.add_argument("--approval-override-reason")
     preflight_parser.add_argument("--model-base", default="not_available")
     preflight_parser.add_argument("--model-tuned", default="not_available")
     preflight_parser.add_argument("--model-base-revision-or-hash", default="not_available")
@@ -2973,9 +3080,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--review-manifest-path")
     run_parser.add_argument("--smoke-evidence")
     run_parser.add_argument("--dev-evidence")
+    run_parser.add_argument("--dev-run-approval")
     run_parser.add_argument("--full-run-approval")
-    run_parser.add_argument("--allow-dev-without-smoke-evidence", action="store_true")
-    run_parser.add_argument("--approval-override-reason")
     run_parser.add_argument("--seeds", nargs="+", required=True)
     run_parser.add_argument("--temperature", type=float, default=0.0)
     run_parser.add_argument("--max-tokens", type=int, default=140)

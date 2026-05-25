@@ -6,7 +6,7 @@ This is Sprint 8 prep only. Do not run the real smoke until Sprint 7 has
 promoted `data/personas.full.jsonl`, produced a promotion manifest, and a local
 vLLM OpenAI-compatible endpoint is explicitly approved for the run.
 
-The smoke run is capped at 20 personas:
+The smoke run is capped at 20 personas and must be explicit:
 
 ```bash
 python3 persona_eval.py plan --persona-count 20 --variants-per-persona 6 --model-count 2 --seed-count 1
@@ -37,6 +37,7 @@ Replace every angle-bracket value before running:
 
 ```bash
 python3 persona_eval.py run \
+  --run-stage smoke \
   --persona-path data/personas.full.jsonl \
   --limit-personas 20 \
   --out results/vllm_smoke_20 \

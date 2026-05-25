@@ -2,18 +2,22 @@
 
 ## Bottom Line
 
-Do not execute the 50-persona dev run until the dev preflight passes or an
-explicit smoke-evidence override is recorded. The expected plan is exactly:
+Do not execute the 50-persona dev run until the dev preflight passes with real
+promotion, review, smoke, and dev-approval evidence. The expected plan is
+exactly:
 
 `50 personas * 6 variants * 2 models * 2 seeds = 1,200 generation calls`.
 
-Current non-dry staged execution remains capped at 20 personas. Do not bypass
-that cap in this runbook.
+Non-dry execution is phase-capped: dev may run at up to 50 personas only when
+`--run-stage dev` is explicit and every dev evidence gate passes.
 
 ## Required Inputs
 
 - `data/personas.full.jsonl`, created only after the dataset promotion gate.
+- Sprint 7 dataset promotion manifest for the exact promoted dataset hash.
+- Full review manifest for the promoted 200-persona dataset.
 - A successful Sprint 8 smoke evidence JSON file.
+- Explicit dev-run approval JSON with the promoted dataset hash.
 - Filled runtime values from `configs/dev.vllm.json`.
 - Explicit model IDs, model revisions/hashes, tokenizer hash, chat-template
   hash, vLLM/runtime version, and GPU/CUDA/driver summary.
@@ -35,6 +39,20 @@ Smoke evidence must be a JSON object with:
 }
 ```
 
+Dev-run approval must be a JSON object with:
+
+```json
+{
+  "approval_type": "dev_run_approval",
+  "status": "approved",
+  "approved_by": "<name-or-team>",
+  "approved_at": "2026-05-25T00:00:00Z",
+  "persona_count": 50,
+  "planned_generation_calls": 1200,
+  "dataset_hash": "sha256:<data-personas-full-jsonl-hash>"
+}
+```
+
 ## Preflight
 
 Run count arithmetic:
@@ -46,13 +64,7 @@ python3 persona_eval.py plan --persona-count 50 --variants-per-persona 6 --model
 Run the dev gate:
 
 ```bash
-python3 persona_eval.py preflight --stage dev --persona-count 50 --variants-per-persona 6 --model-count 2 --seed-count 2 --smoke-evidence <smoke-evidence.json>
-```
-
-If smoke evidence is intentionally overridden, the override must be explicit:
-
-```bash
-python3 persona_eval.py preflight --stage dev --persona-count 50 --variants-per-persona 6 --model-count 2 --seed-count 2 --allow-dev-without-smoke-evidence --approval-override-reason "<operator/date/reason>"
+python3 persona_eval.py preflight --stage dev --persona-path data/personas.full.jsonl --limit-personas 50 --model-count 2 --seed-count 2 --promotion-manifest <promotion-manifest.json> --review-manifest <full-review.jsonl> --smoke-evidence <smoke-evidence.json> --dev-run-approval <dev-run-approval.json>
 ```
 
 ## Execution Command
@@ -61,7 +73,7 @@ Only after the cap is intentionally lifted in an approved implementation slice
 and preflight has passed:
 
 ```bash
-python3 persona_eval.py run --run-stage dev --persona-path data/personas.full.jsonl --limit-personas 50 --out results/dev_50_<YYYYMMDD> --adapter vllm --base-url <local-vllm-url> --serving-stack-version <vllm-version> --model-base <base-model-id> --model-tuned <tuned-model-id> --model-base-revision-or-hash <base-revision> --model-tuned-revision-or-hash <tuned-revision> --tokenizer-name <tokenizer-name> --tokenizer-hash <tokenizer-hash> --chat-template-hash <chat-template-hash> --gpu-cuda-driver <gpu-cuda-driver-summary> --promotion-manifest-path <promotion-manifest.json> --review-manifest-path <full-review.jsonl> --smoke-evidence <smoke-evidence.json> --seeds 1,2 --run-id dev_50_<YYYYMMDD>
+python3 persona_eval.py run --run-stage dev --persona-path data/personas.full.jsonl --limit-personas 50 --out results/dev_50_<YYYYMMDD> --adapter vllm --base-url <local-vllm-url> --serving-stack-version <vllm-version> --model-base <base-model-id> --model-tuned <tuned-model-id> --model-base-revision-or-hash <base-revision> --model-tuned-revision-or-hash <tuned-revision> --tokenizer-name <tokenizer-name> --tokenizer-hash <tokenizer-hash> --chat-template-hash <chat-template-hash> --gpu-cuda-driver <gpu-cuda-driver-summary> --promotion-manifest-path <promotion-manifest.json> --review-manifest-path <full-review.jsonl> --smoke-evidence <smoke-evidence.json> --dev-run-approval <dev-run-approval.json> --seeds 1,2 --run-id dev_50_<YYYYMMDD>
 python3 aggregate.py --manifest results/dev_50_<YYYYMMDD>/manifest.json --results results/dev_50_<YYYYMMDD>/results.jsonl --out reports/dev_50_<YYYYMMDD>
 ```
 
@@ -77,7 +89,7 @@ python3 aggregate.py --manifest results/dev_50_<YYYYMMDD>/manifest.json --result
 
 ## Stop Conditions
 
-- Smoke evidence is missing and no explicit override is recorded.
+- Promotion, review, smoke, or dev approval evidence is missing.
 - `data/personas.full.jsonl` is absent, changed unexpectedly, or not validated.
 - Any runtime or prompt setting changes without cache invalidation and rerun
   notes.
