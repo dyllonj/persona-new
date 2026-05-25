@@ -9,8 +9,9 @@ allowed only for a non-dry run whose gates all pass.
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 import copy
+import difflib
 import json
 from pathlib import Path
 import sys
@@ -28,12 +29,14 @@ from persona_eval import (
 )
 
 
-PROMOTION_VERSION = "sprint7_dry_run"
+PROMOTION_VERSION = "sprint7_promotion_gate_v2"
 TARGET_PROMOTION_ROWS = 200
 DEFAULT_FULL_DATASET_PATH = REPO_ROOT / "data" / "personas.full.jsonl"
 DEFAULT_PROMOTION_MANIFEST_PATH = REPO_ROOT / "reports" / "dataset_promotion_manifest.json"
 PERSONA_TOP_LEVEL_FIELDS = set(load_schema(PERSONA_SCHEMA_PATH)["properties"])
 PASSING_PROMOTION_REVIEW_STATUSES = {"approved"}
+MAX_DETAILED_REJECTIONS_PER_REASON = 20
+NEAR_DUPLICATE_THRESHOLD = 0.92
 PROMOTION_REVIEW_GATE_FIELDS = (
     "semantic_equivalence_status",
     "nli_equivalence_status",
@@ -41,6 +44,13 @@ PROMOTION_REVIEW_GATE_FIELDS = (
     "safety_review_status",
     "gold_label_review_status",
 )
+REVIEW_GATE_REASON_CODES = {
+    "semantic_equivalence_status": "semantic_equivalence_evidence_missing",
+    "nli_equivalence_status": "nli_equivalence_evidence_missing",
+    "contradiction_status": "contradiction_evidence_missing",
+    "safety_review_status": "safety_review_evidence_missing",
+    "gold_label_review_status": "gold_label_review_evidence_missing",
+}
 
 
 def _relative_or_absolute(path: str | Path) -> str:
@@ -59,23 +69,54 @@ def _empty_report(
     dry_run: bool,
 ) -> dict[str, Any]:
     return {
+        "manifest_type": "dataset_promotion",
+        "artifact_type": "dataset_promotion",
         "promotion_version": PROMOTION_VERSION,
         "status": "blocked",
         "dry_run": dry_run,
         "target_count": TARGET_PROMOTION_ROWS,
+        "persona_count": 0,
         "candidate_path": _relative_or_absolute(candidate_path),
         "review_path": _relative_or_absolute(review_path),
         "out_path": _relative_or_absolute(out_path) if out_path is not None else None,
         "candidate_input_hash": None,
+        "candidate_manifest_path": None,
+        "candidate_manifest_hash": None,
         "review_manifest_hash": None,
+        "input_hashes": {
+            "candidate_input_hash": None,
+            "candidate_manifest_hash": None,
+            "review_manifest_hash": None,
+        },
+        "dataset_hash": None,
         "promoted_output_hash": None,
         "candidate_row_count": 0,
         "valid_candidate_count": 0,
         "approved_candidate_count": 0,
+        "filter_summary": {
+            "candidate_schema_invalid": 0,
+            "exact_duplicate_groups": 0,
+            "gold_label_preview_mismatches": 0,
+            "near_duplicate_pairs": 0,
+            "pii_or_real_person_findings": 0,
+            "restricted_role_findings": 0,
+            "semantic_embedding_cluster_review": (
+                "not_available_in_current_sprint5_infrastructure; "
+                "promotion remains blocked before this could pass"
+            ),
+        },
+        "validator_versions": {
+            "candidate_generation": "not_declared",
+            "dataset_promotion": PROMOTION_VERSION,
+            "dataset_readiness": dataset_readiness.READINESS_VERSION,
+        },
         "write_permitted": False,
         "write_performed": False,
         "rejection_counts": {},
+        "rejection_reasons": [],
         "rejections": [],
+        "_rejection_detail_counts": {},
+        "_rejection_reason_details": {},
     }
 
 
@@ -86,8 +127,22 @@ def _add_rejection(
     persona_id: str | None = None,
     detail: str | None = None,
     category: str | None = None,
+    count: int = 1,
+    summary_detail: str | None = None,
 ) -> None:
+    if count < 1:
+        return
+    report["rejection_counts"][reason_code] = report["rejection_counts"].get(reason_code, 0) + count
+    if summary_detail or detail:
+        report["_rejection_reason_details"].setdefault(reason_code, summary_detail or detail)
+
+    detail_counts = report["_rejection_detail_counts"]
+    if detail_counts.get(reason_code, 0) >= MAX_DETAILED_REJECTIONS_PER_REASON:
+        return
+
     rejection: dict[str, Any] = {"reason_code": reason_code}
+    if count != 1:
+        rejection["count"] = count
     if persona_id is not None:
         rejection["persona_id"] = persona_id
     if category is not None:
@@ -95,10 +150,58 @@ def _add_rejection(
     if detail is not None:
         rejection["detail"] = detail
     report["rejections"].append(rejection)
+    detail_counts[reason_code] = detail_counts.get(reason_code, 0) + 1
 
 
 def _finalize_rejection_counts(report: dict[str, Any]) -> None:
-    report["rejection_counts"] = dict(sorted(Counter(row["reason_code"] for row in report["rejections"]).items()))
+    report["rejection_counts"] = dict(sorted(report["rejection_counts"].items()))
+    details = report.get("_rejection_reason_details", {})
+    report["rejection_reasons"] = [
+        {
+            key: value
+            for key, value in {
+                "reason_code": reason_code,
+                "count": count,
+                "detail": details.get(reason_code),
+            }.items()
+            if value is not None
+        }
+        for reason_code, count in report["rejection_counts"].items()
+    ]
+    report["input_hashes"] = {
+        "candidate_input_hash": report.get("candidate_input_hash"),
+        "candidate_manifest_hash": report.get("candidate_manifest_hash"),
+        "review_manifest_hash": report.get("review_manifest_hash"),
+    }
+    report.pop("_rejection_detail_counts", None)
+    report.pop("_rejection_reason_details", None)
+
+
+def _candidate_manifest_path(candidate_path: Path) -> Path:
+    return candidate_path.with_suffix(".manifest.json")
+
+
+def _load_candidate_manifest_metadata(candidate_path: Path, report: dict[str, Any]) -> None:
+    manifest_path = _candidate_manifest_path(candidate_path)
+    if not manifest_path.exists():
+        return
+    report["candidate_manifest_path"] = _relative_or_absolute(manifest_path)
+    report["candidate_manifest_hash"] = hash_file_bytes(manifest_path)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        _add_rejection(
+            report,
+            reason_code="candidate_manifest_invalid",
+            detail=f"{manifest_path} is not valid JSON: {exc}",
+        )
+        return
+    validator_version = payload.get("validator_version")
+    if isinstance(validator_version, str) and validator_version.strip():
+        report["validator_versions"]["candidate_generation"] = validator_version
+    generator_version = payload.get("generator_version")
+    if isinstance(generator_version, str) and generator_version.strip():
+        report["validator_versions"]["candidate_generator"] = generator_version
 
 
 def _candidate_low_confidence_flags(raw_row: dict[str, Any]) -> list[str]:
@@ -195,19 +298,24 @@ def _review_has_required_evidence(row: dict[str, Any]) -> bool:
     return all(_review_gate_passes(row, field) for field in PROMOTION_REVIEW_GATE_FIELDS)
 
 
-def _review_failure_reason(row: dict[str, Any] | None) -> str:
+def _review_failure_reasons(row: dict[str, Any] | None) -> list[str]:
     if row is None:
-        return "review_evidence_missing"
+        return ["review_evidence_missing"]
     if row.get("review_status") not in PASSING_PROMOTION_REVIEW_STATUSES:
-        return "review_status_not_approved"
+        return ["review_status_not_approved"]
     if not all(_review_has_text(row, field) for field in ("reviewer", "reviewed_at", "review_reason")):
-        return "review_metadata_missing"
+        return ["review_metadata_missing"]
     if "unresolved_concerns" not in row:
-        return "unresolved_concerns_missing"
+        return ["unresolved_concerns_missing"]
     unresolved = row.get("unresolved_concerns")
     if not isinstance(unresolved, list) or unresolved:
-        return "unresolved_review_concerns"
-    return "review_gate_evidence_incomplete"
+        return ["unresolved_review_concerns"]
+    reasons = [
+        REVIEW_GATE_REASON_CODES[field]
+        for field in PROMOTION_REVIEW_GATE_FIELDS
+        if not _review_gate_passes(row, field)
+    ]
+    return reasons or ["review_gate_evidence_incomplete"]
 
 
 def _load_review_rows(path: str | Path, report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -223,7 +331,11 @@ def _load_review_rows(path: str | Path, report: dict[str, Any]) -> list[dict[str
 
 
 def _add_safety_rejections(report: dict[str, Any], persona_rows: list[dict[str, Any]]) -> None:
-    for finding in dataset_readiness.pii_real_person_findings(persona_rows):
+    pii_findings = dataset_readiness.pii_real_person_findings(persona_rows)
+    restricted_findings = dataset_readiness.restricted_role_findings(persona_rows)
+    report["filter_summary"]["pii_or_real_person_findings"] = len(pii_findings)
+    report["filter_summary"]["restricted_role_findings"] = len(restricted_findings)
+    for finding in pii_findings:
         _add_rejection(
             report,
             reason_code="safety_filter_blocked",
@@ -231,7 +343,7 @@ def _add_safety_rejections(report: dict[str, Any], persona_rows: list[dict[str, 
             category=finding["category"],
             detail=f"{finding['field']}: {finding['matched_text']}",
         )
-    for finding in dataset_readiness.restricted_role_findings(persona_rows):
+    for finding in restricted_findings:
         _add_rejection(
             report,
             reason_code="restricted_category_blocked",
@@ -241,27 +353,96 @@ def _add_safety_rejections(report: dict[str, Any], persona_rows: list[dict[str, 
         )
 
 
+def _sequence_ratio_upper_bound(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    overlap = sum((Counter(left) & Counter(right)).values())
+    return (2.0 * overlap) / (len(left) + len(right))
+
+
+def _near_duplicate_scan(
+    persona_rows: list[dict[str, Any]],
+    *,
+    threshold: float = NEAR_DUPLICATE_THRESHOLD,
+    max_examples: int = MAX_DETAILED_REJECTIONS_PER_REASON,
+) -> dict[str, Any]:
+    normalized = [
+        (
+            str(row.get("persona_id", "<missing>")),
+            dataset_readiness.normalize_text_for_dedupe(dataset_readiness.persona_dedupe_text(row)),
+        )
+        for row in persona_rows
+    ]
+    token_sets = [set(text.split()) for _, text in normalized]
+    count = 0
+    examples: list[dict[str, Any]] = []
+    for left_index in range(len(normalized)):
+        left_id, left_text = normalized[left_index]
+        left_tokens = token_sets[left_index]
+        for right_index in range(left_index + 1, len(normalized)):
+            right_id, right_text = normalized[right_index]
+            if left_text == right_text:
+                continue
+            right_tokens = token_sets[right_index]
+            token_overlap = 0.0
+            if left_tokens and right_tokens:
+                token_overlap = len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens))
+            if token_overlap >= threshold:
+                similarity = token_overlap
+            elif _sequence_ratio_upper_bound(left_text, right_text) < threshold:
+                continue
+            else:
+                sequence_ratio = difflib.SequenceMatcher(None, left_text, right_text).ratio()
+                similarity = max(token_overlap, sequence_ratio)
+                if similarity < threshold:
+                    continue
+            count += 1
+            if len(examples) < max_examples:
+                examples.append(
+                    {
+                        "persona_ids": [left_id, right_id],
+                        "similarity": similarity,
+                        "threshold": threshold,
+                    }
+                )
+    return {
+        "count": count,
+        "examples": examples,
+        "threshold": threshold,
+    }
+
+
 def _add_dedupe_rejections(report: dict[str, Any], persona_rows: list[dict[str, Any]]) -> None:
-    for group in dataset_readiness.exact_duplicate_groups(persona_rows):
+    exact_groups = dataset_readiness.exact_duplicate_groups(persona_rows)
+    near_scan = _near_duplicate_scan(persona_rows)
+    report["filter_summary"]["exact_duplicate_groups"] = len(exact_groups)
+    report["filter_summary"]["near_duplicate_pairs"] = near_scan["count"]
+    for group in exact_groups:
         _add_rejection(
             report,
             reason_code="duplicate_candidate_blocked",
             detail="exact duplicate persona text: " + ", ".join(group["persona_ids"]),
         )
-    for pair in dataset_readiness.near_duplicate_pairs(persona_rows):
+    if near_scan["count"]:
+        first = near_scan["examples"][0]
+        first_detail = (
+            "Deterministic near-duplicate scan found "
+            f"{near_scan['count']:,} candidate pairs at or above threshold {near_scan['threshold']:.2f}; "
+            f"first observed pair {first['persona_ids'][0]}/{first['persona_ids'][1]} "
+            f"similarity={first['similarity']:.3f}."
+        )
         _add_rejection(
             report,
             reason_code="duplicate_candidate_blocked",
-            detail=(
-                "near duplicate persona text: "
-                + ", ".join(pair["persona_ids"])
-                + f" similarity={pair['similarity']:.3f}"
-            ),
+            count=near_scan["count"],
+            detail=first_detail,
+            summary_detail=first_detail,
         )
 
 
 def _add_gold_label_rejections(report: dict[str, Any], persona_rows: list[dict[str, Any]]) -> None:
     gold_report = dataset_readiness.gold_label_preview_report(persona_rows)
+    report["filter_summary"]["gold_label_preview_mismatches"] = len(gold_report.get("mismatches", []))
     for mismatch in gold_report.get("mismatches", []):
         _add_rejection(
             report,
@@ -289,14 +470,28 @@ def _add_review_rejections(
 
     review_by_id = {row["persona_id"]: row for row in review_rows}
     reviewed_with_evidence = 0
+    missing_review_ids: list[str] = []
+    if review_rows and len(review_by_id) != len(persona_rows):
+        missing_ids = sorted({row["persona_id"] for row in persona_rows} - set(review_by_id))
+        _add_rejection(
+            report,
+            reason_code="review_manifest_scope_incomplete",
+            detail=(
+                f"reviewed_persona_count={len(review_by_id)}; "
+                f"valid_candidate_count={len(persona_rows)}; missing_count={len(missing_ids)}"
+            ),
+        )
     for persona_row in persona_rows:
         persona_id = persona_row["persona_id"]
         review_row = review_by_id.get(persona_id)
         if _review_has_required_evidence(review_row or {}):
             reviewed_with_evidence += 1
             continue
-        reason = _review_failure_reason(review_row)
-        _add_rejection(report, reason_code=reason, persona_id=persona_id)
+        if review_row is None:
+            missing_review_ids.append(persona_id)
+        else:
+            for reason in _review_failure_reasons(review_row):
+                _add_rejection(report, reason_code=reason, persona_id=persona_id)
         if low_confidence_by_id.get(persona_id):
             _add_rejection(
                 report,
@@ -305,12 +500,30 @@ def _add_review_rejections(
                 detail=", ".join(low_confidence_by_id[persona_id]),
             )
 
+    if missing_review_ids:
+        if len(missing_review_ids) == len(persona_rows):
+            detail = f"No full-dataset review manifest rows were available for the {len(persona_rows)} candidates."
+        else:
+            detail = (
+                f"Review manifest is missing rows for {len(missing_review_ids)} of {len(persona_rows)} "
+                "promotion candidates; first missing ids: " + ", ".join(missing_review_ids[:5])
+            )
+        _add_rejection(
+            report,
+            reason_code="review_evidence_missing",
+            count=len(missing_review_ids),
+            detail=detail,
+            summary_detail=detail,
+        )
+
     minimum_required = (len(persona_rows) + 9) // 10
     if reviewed_with_evidence < minimum_required:
+        detail = f"reviewed_with_evidence={reviewed_with_evidence}; minimum_required={minimum_required}"
         _add_rejection(
             report,
             reason_code="minimum_review_coverage_not_met",
-            detail=f"reviewed_with_evidence={reviewed_with_evidence}; minimum_required={minimum_required}",
+            detail=detail,
+            summary_detail=detail,
         )
     report["approved_candidate_count"] = reviewed_with_evidence
 
@@ -326,6 +539,7 @@ def evaluate_promotion(
     candidate_path = Path(candidate_path)
     review_path = Path(review_path)
     report["candidate_input_hash"] = hash_file_bytes(candidate_path)
+    _load_candidate_manifest_metadata(candidate_path, report)
     if review_path.exists():
         report["review_manifest_hash"] = hash_file_bytes(review_path)
     else:
@@ -338,6 +552,8 @@ def evaluate_promotion(
     persona_rows, low_confidence_by_id, invalid_rows = load_candidate_personas(candidate_path)
     report["candidate_row_count"] = len(load_jsonl(candidate_path))
     report["valid_candidate_count"] = len(persona_rows)
+    report["persona_count"] = len(persona_rows)
+    report["filter_summary"]["candidate_schema_invalid"] = len(invalid_rows)
     for invalid in invalid_rows:
         _add_rejection(
             report,
@@ -347,22 +563,31 @@ def evaluate_promotion(
         )
 
     if len(persona_rows) != TARGET_PROMOTION_ROWS:
+        detail = (
+            f"Candidate pool has {len(persona_rows)} valid rows; Sprint 7 promotion requires "
+            f"exactly {TARGET_PROMOTION_ROWS} rows in the promotion candidate path."
+        )
         _add_rejection(
             report,
             reason_code="promotion_requires_exactly_200_valid_rows",
-            detail=f"valid_candidate_count={len(persona_rows)}; target_count={TARGET_PROMOTION_ROWS}",
+            detail=detail,
+            summary_detail=detail,
         )
 
     _add_safety_rejections(report, persona_rows)
     _add_dedupe_rejections(report, persona_rows)
     _add_gold_label_rejections(report, persona_rows)
     review_rows = _load_review_rows(review_path, report) if review_path.exists() else []
-    review_manifest_invalid = any(row["reason_code"] == "review_manifest_invalid" for row in report["rejections"])
+    review_manifest_invalid = "review_manifest_invalid" in report["rejection_counts"]
     if review_rows or not review_manifest_invalid:
         _add_review_rejections(report, persona_rows, review_rows, low_confidence_by_id)
 
     _finalize_rejection_counts(report)
-    if not report["rejections"] and len(persona_rows) == TARGET_PROMOTION_ROWS:
+    if (
+        not report["rejection_counts"]
+        and len(persona_rows) == TARGET_PROMOTION_ROWS
+        and report["approved_candidate_count"] == TARGET_PROMOTION_ROWS
+    ):
         report["status"] = "ready"
         report["write_permitted"] = not dry_run
     return report, persona_rows
@@ -386,7 +611,11 @@ def write_promotion_outputs(
     with out.open("w", encoding="utf-8") as handle:
         for row in persona_rows:
             handle.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
-    report["promoted_output_hash"] = hash_file_bytes(out)
+    output_hash = hash_file_bytes(out)
+    report["status"] = "promoted"
+    report["persona_count"] = len(persona_rows)
+    report["dataset_hash"] = output_hash
+    report["promoted_output_hash"] = output_hash
     report["write_performed"] = True
     with manifest.open("w", encoding="utf-8") as handle:
         json.dump(report, handle, sort_keys=True, indent=2)
@@ -404,7 +633,9 @@ def _print_summary(report: dict[str, Any], *, json_output: bool) -> None:
     print(f"valid_candidate_count={report['valid_candidate_count']}")
     print(f"approved_candidate_count={report['approved_candidate_count']}")
     print("rejection_counts=" + json.dumps(report["rejection_counts"], sort_keys=True))
-    if report["status"] != "ready":
+    if report["status"] == "promoted":
+        print("write_blocked=false")
+    elif report["status"] != "ready":
         print("write_blocked=true")
     elif report["dry_run"]:
         print("write_blocked=true")
@@ -440,7 +671,7 @@ def cmd_promote(args: argparse.Namespace) -> int:
             manifest_path=manifest_path,
         )
     _print_summary(report, json_output=args.json)
-    return 0 if report["status"] == "ready" else 1
+    return 0 if report["status"] in {"ready", "promoted"} else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

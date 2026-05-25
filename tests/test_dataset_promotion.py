@@ -6,11 +6,18 @@ import unittest
 from pathlib import Path
 
 import dataset_promotion
-from persona_eval import PersonaValidationError, load_jsonl, validate_persona_row
+from persona_eval import (
+    PersonaValidationError,
+    hash_file_bytes,
+    load_jsonl,
+    validate_dataset_promotion_manifest,
+    validate_persona_row,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_PATH = ROOT / "data" / "personas.sample.jsonl"
+CURRENT_BAD_POOL_PATH = ROOT / "candidates" / "sample_candidates.jsonl"
 
 
 def _unique_words(index, count):
@@ -187,6 +194,102 @@ class DatasetPromotionTests(unittest.TestCase):
         self.assertEqual(len(promoted_rows), 200)
         self.assertFalse(out_path.exists())
         self.assertFalse(report["write_permitted"])
+
+    def test_current_bad_pool_dry_run_blocks_with_exact_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing_review_path = root / "personas.full.review.jsonl"
+            out_path = root / "personas.full.jsonl"
+
+            report, _ = dataset_promotion.evaluate_promotion(
+                candidate_path=CURRENT_BAD_POOL_PATH,
+                review_path=missing_review_path,
+                out_path=out_path,
+                dry_run=True,
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(
+            report["rejection_counts"],
+            {
+                "duplicate_candidate_blocked": 4350,
+                "minimum_review_coverage_not_met": 1,
+                "promotion_requires_exactly_200_valid_rows": 1,
+                "review_evidence_missing": 300,
+                "review_manifest_missing": 1,
+            },
+        )
+        self.assertEqual(report["filter_summary"]["near_duplicate_pairs"], 4350)
+        self.assertEqual(report["candidate_row_count"], 300)
+        self.assertEqual(report["valid_candidate_count"], 300)
+        reasons = {row["reason_code"]: row for row in report["rejection_reasons"]}
+        self.assertEqual(
+            reasons["duplicate_candidate_blocked"]["detail"],
+            (
+                "Deterministic near-duplicate scan found 4,350 candidate pairs at or above threshold 0.92; "
+                "first observed pair candidate_0001/candidate_0011 similarity=0.990."
+            ),
+        )
+        self.assertFalse(out_path.exists())
+
+    def test_partial_semantic_and_nli_review_gates_block_promotion(self):
+        reviews = copy.deepcopy(self.valid_reviews_200)
+        incomplete_gate = {
+            "status": "manual_required",
+            "reviewer_override": False,
+            "evidence": [],
+        }
+        for review in reviews[20:]:
+            review["semantic_equivalence_status"] = copy.deepcopy(incomplete_gate)
+            review["nli_equivalence_status"] = copy.deepcopy(incomplete_gate)
+            review["contradiction_status"] = copy.deepcopy(incomplete_gate)
+
+        (report, _), _ = self.evaluate(self.valid_rows_200, reviews)
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["approved_candidate_count"], 20)
+        self.assertEqual(report["rejection_counts"]["semantic_equivalence_evidence_missing"], 180)
+        self.assertEqual(report["rejection_counts"]["nli_equivalence_evidence_missing"], 180)
+        self.assertEqual(report["rejection_counts"]["contradiction_evidence_missing"], 180)
+
+    def test_non_dry_happy_path_writes_downstream_compatible_manifest_in_temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate_path = root / "candidates.jsonl"
+            review_path = root / "reviews.jsonl"
+            out_path = root / "personas.full.jsonl"
+            manifest_path = root / "dataset_promotion_manifest.json"
+            _write_jsonl(candidate_path, self.valid_rows_200)
+            _write_jsonl(review_path, self.valid_reviews_200)
+
+            report, promoted_rows = dataset_promotion.evaluate_promotion(
+                candidate_path=candidate_path,
+                review_path=review_path,
+                out_path=out_path,
+                dry_run=False,
+            )
+            dataset_promotion.write_promotion_outputs(
+                persona_rows=promoted_rows,
+                report=report,
+                out_path=out_path,
+                manifest_path=manifest_path,
+            )
+
+            self.assertTrue(out_path.exists())
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "promoted")
+            self.assertEqual(manifest["manifest_type"], "dataset_promotion")
+            self.assertEqual(manifest["artifact_type"], "dataset_promotion")
+            self.assertEqual(manifest["status"], "promoted")
+            self.assertEqual(manifest["persona_count"], 200)
+            self.assertEqual(manifest["dataset_hash"], hash_file_bytes(out_path))
+            self.assertEqual(manifest["promoted_output_hash"], hash_file_bytes(out_path))
+            self.assertEqual(manifest["candidate_input_hash"], hash_file_bytes(candidate_path))
+            self.assertEqual(manifest["review_manifest_hash"], hash_file_bytes(review_path))
+            self.assertEqual(manifest["rejection_counts"], {})
+            self.assertEqual(manifest["validator_versions"]["dataset_promotion"], dataset_promotion.PROMOTION_VERSION)
+            validate_dataset_promotion_manifest(manifest_path, persona_path=out_path)
 
     def test_non_dry_run_blocked_does_not_write_output(self):
         (report, promoted_rows), out_path = self.evaluate(
