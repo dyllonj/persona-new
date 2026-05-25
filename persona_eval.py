@@ -2672,8 +2672,8 @@ def _real_adapter_base_urls(args: argparse.Namespace) -> tuple[str, str]:
     if base_url and tuned_url:
         return base_url, tuned_url
     raise PersonaValidationError(
-        "vllm/openai-compatible adapters require --base-url as a shared endpoint "
-        "or both --base-url-base and --base-url-tuned"
+        "--base-url is required as a shared endpoint, or provide both "
+        "--base-url-base and --base-url-tuned for vllm/openai-compatible adapters"
     )
 
 
