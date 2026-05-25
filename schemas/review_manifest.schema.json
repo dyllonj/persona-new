@@ -74,6 +74,25 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["status", "reviewer_override", "evidence"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": ["passed", "manual_pass"]
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "status": {
           "type": "string",
@@ -86,7 +105,8 @@
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "\\S"
           }
         }
       }

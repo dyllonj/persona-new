@@ -14,6 +14,34 @@ SAMPLE_PATH = ROOT / "data" / "personas.sample.jsonl"
 REVIEW_PATH = ROOT / "reviews" / "personas.sample.review.jsonl"
 
 
+def _gate(status="manual_pass", evidence=None):
+    return {
+        "status": status,
+        "reviewer_override": False,
+        "evidence": ["fixture review evidence"] if evidence is None else evidence,
+    }
+
+
+def _review_for(persona_id, *, status="approved"):
+    return {
+        "persona_id": persona_id,
+        "reviewer": "fixture_reviewer",
+        "review_status": status,
+        "reviewed_at": "2026-05-25T00:00:00Z",
+        "review_reason": "Complete fixture review evidence.",
+        "low_confidence_flags": [],
+        "semantic_equivalence_status": _gate(),
+        "nli_equivalence_status": _gate(),
+        "contradiction_status": _gate(),
+        "safety_review_status": _gate("passed"),
+        "gold_label_review_status": _gate(),
+    }
+
+
+def _write_jsonl(path, rows):
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+
+
 class DatasetReadinessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -21,6 +49,18 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def row(self):
         return copy.deepcopy(self.rows[0])
+
+    def promotion_rows(self, count):
+        rows = []
+        for index in range(count):
+            row = copy.deepcopy(self.rows[index % len(self.rows)])
+            row["persona_id"] = f"promo_{index:03d}"
+            row["source"]["source_persona_id"] = f"promo_source_{index:03d}"
+            row["seed_prompt"]["prompt_id"] = f"promo_prompt_{index:03d}"
+            for variant in row["variants"]:
+                variant["variant_id"] = f"{row['persona_id']}_{variant['type']}"
+            rows.append(row)
+        return rows
 
     def test_benign_sample_rows_pass_safety_filters(self):
         pii = dataset_readiness.pii_real_person_report(self.rows)
@@ -103,6 +143,21 @@ class DatasetReadinessTests(unittest.TestCase):
             with self.assertRaises(PersonaValidationError):
                 dataset_readiness.load_review_manifest(bad_path)
 
+    def test_review_manifest_schema_rejects_passing_gate_without_evidence(self):
+        review_rows = dataset_readiness.load_review_manifest(REVIEW_PATH)
+        bad_row = copy.deepcopy(review_rows[0])
+        bad_row["semantic_equivalence_status"] = {
+            "status": "manual_pass",
+            "reviewer_override": False,
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_path = Path(tmp) / "bad.review.jsonl"
+            bad_path.write_text(json.dumps(bad_row) + "\n", encoding="utf-8")
+            with self.assertRaises(PersonaValidationError):
+                dataset_readiness.load_review_manifest(bad_path)
+
     def test_low_confidence_rows_require_review_evidence(self):
         review_rows = dataset_readiness.load_review_manifest(REVIEW_PATH)
         missing_first = [row for row in review_rows if row["persona_id"] != "fixture_001"]
@@ -173,39 +228,7 @@ class DatasetReadinessTests(unittest.TestCase):
         )
 
     def test_manual_semantic_and_nli_gates_require_every_persona(self):
-        approved_review = {
-            "persona_id": "fixture_001",
-            "reviewer": "fixture_reviewer",
-            "review_status": "approved",
-            "reviewed_at": "2026-05-25T00:00:00Z",
-            "review_reason": "Complete manual fixture evidence for one row only.",
-            "low_confidence_flags": [],
-            "semantic_equivalence_status": {
-                "status": "manual_pass",
-                "reviewer_override": False,
-                "evidence": ["All variants preserve the canonical meaning for this row."],
-            },
-            "nli_equivalence_status": {
-                "status": "manual_pass",
-                "reviewer_override": False,
-                "evidence": ["NLI-equivalence review passed for this row."],
-            },
-            "contradiction_status": {
-                "status": "manual_pass",
-                "reviewer_override": False,
-                "evidence": ["Contradiction review passed for this row."],
-            },
-            "safety_review_status": {
-                "status": "passed",
-                "reviewer_override": False,
-                "evidence": ["Safety review passed for this row."],
-            },
-            "gold_label_review_status": {
-                "status": "manual_pass",
-                "reviewer_override": False,
-                "evidence": ["Gold labels match for this row."],
-            },
-        }
+        approved_review = _review_for("fixture_001")
 
         semantic = dataset_readiness.manual_gate_report(
             [approved_review],
@@ -232,6 +255,108 @@ class DatasetReadinessTests(unittest.TestCase):
             {"persona_id": "fixture_002", "field": "nli_equivalence_status", "status": "missing_review_row"},
             nli["incomplete"],
         )
+
+    def test_manual_gate_report_blocks_partial_and_blank_critical_evidence(self):
+        partial_review = _review_for("fixture_001")
+        partial_review["nli_equivalence_status"] = _gate("manual_required", [])
+        partial_review["contradiction_status"] = _gate("manual_pass", ["  "])
+
+        report = dataset_readiness.manual_gate_report(
+            [partial_review],
+            self.rows[:1],
+            fields=("semantic_equivalence_status", "nli_equivalence_status", "contradiction_status"),
+            ready_reason_code="all critical evidence present",
+            blocked_reason_code="critical_evidence_missing",
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["reason_code"], "critical_evidence_missing")
+        self.assertIn(
+            {"persona_id": "fixture_001", "field": "nli_equivalence_status", "status": "manual_required"},
+            report["incomplete"],
+        )
+        self.assertIn(
+            {"persona_id": "fixture_001", "field": "contradiction_status", "status": "manual_pass"},
+            report["incomplete"],
+        )
+
+    def test_manual_gate_report_accepts_real_validator_evidence_without_review_row(self):
+        machine_evidence = {
+            "fixture_001": {
+                "semantic_equivalence_status": _gate("passed", ["validator semantic evidence"]),
+                "nli_equivalence_status": _gate("passed", ["validator nli evidence"]),
+                "contradiction_status": _gate("passed", ["validator contradiction evidence"]),
+            }
+        }
+
+        report = dataset_readiness.manual_gate_report(
+            [],
+            self.rows[:1],
+            fields=("semantic_equivalence_status", "nli_equivalence_status", "contradiction_status"),
+            ready_reason_code="all validator evidence present",
+            blocked_reason_code="critical_evidence_missing",
+            machine_validator_evidence_by_persona=machine_evidence,
+        )
+
+        self.assertEqual(report["status"], "pass")
+
+    def test_full_scope_review_coverage_requires_exactly_200_rows(self):
+        persona_rows = [{"persona_id": f"promo_{index:03d}"} for index in range(201)]
+        review_rows = [_review_for(row["persona_id"]) for row in persona_rows]
+
+        report = dataset_readiness.review_coverage_report(
+            persona_rows,
+            review_rows,
+            require_full_dataset_scope=True,
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["reason_code"], "full_dataset_review_scope_missing")
+        self.assertEqual(report["persona_count"], 201)
+        self.assertEqual(report["target_persona_count"], 200)
+
+    def test_full_scope_review_coverage_requires_approved_status(self):
+        persona_rows = [{"persona_id": f"promo_{index:03d}"} for index in range(200)]
+        review_rows = [_review_for(row["persona_id"], status="sample_reviewed") for row in persona_rows]
+
+        report = dataset_readiness.review_coverage_report(
+            persona_rows,
+            review_rows,
+            require_full_dataset_scope=True,
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["reason_code"], "minimum_review_coverage_not_met")
+        self.assertEqual(report["reviewed_with_evidence_count"], 0)
+
+    def test_full_readiness_blocks_partial_critical_evidence_for_200_rows(self):
+        persona_rows = self.promotion_rows(200)
+        review_rows = [_review_for(row["persona_id"]) for row in persona_rows]
+        review_rows[17]["nli_equivalence_status"] = _gate("manual_required", [])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            persona_path = root / "personas.full.jsonl"
+            review_path = root / "personas.full.review.jsonl"
+            _write_jsonl(persona_path, persona_rows)
+            _write_jsonl(review_path, review_rows)
+
+            readiness = dataset_readiness.full_dataset_readiness_report(
+                root=ROOT,
+                persona_path=persona_path,
+                review_manifest_path=review_path,
+            )
+
+        nli_check = readiness["checks"]["nli_contradiction_equivalence_checks_exist"]
+        coverage_check = readiness["checks"]["human_review_coverage_sufficient"]
+
+        self.assertEqual(nli_check["status"], "blocked")
+        self.assertEqual(nli_check["reason_code"], "nli_or_contradiction_manual_required_or_missing")
+        self.assertIn(
+            {"persona_id": "promo_017", "field": "nli_equivalence_status", "status": "manual_required"},
+            nli_check["details"]["incomplete"],
+        )
+        self.assertEqual(coverage_check["status"], "pass")
 
 
 if __name__ == "__main__":

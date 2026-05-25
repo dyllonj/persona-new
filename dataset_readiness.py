@@ -35,9 +35,22 @@ REVIEW_MANIFEST_SCHEMA_PATH = REPO_ROOT / "schemas" / "review_manifest.schema.js
 DEFAULT_SAMPLE_PATH = REPO_ROOT / "data" / "personas.sample.jsonl"
 DEFAULT_REVIEW_MANIFEST_PATH = REPO_ROOT / "reviews" / "personas.sample.review.jsonl"
 ALLOWED_DATA_FILENAMES = {"personas.sample.jsonl"}
+FULL_DATASET_PERSONA_COUNT = 200
 PASSING_REVIEW_STATUSES = {"approved", "sample_reviewed"}
 PASSING_GATE_STATUSES = {"passed", "manual_pass"}
 INCOMPLETE_GATE_STATUSES = {"manual_required", "blocked", "not_run"}
+REVIEW_GATE_FIELDS = (
+    "semantic_equivalence_status",
+    "nli_equivalence_status",
+    "contradiction_status",
+    "safety_review_status",
+    "gold_label_review_status",
+)
+CRITICAL_REVIEW_GATE_FIELDS = (
+    "semantic_equivalence_status",
+    "nli_equivalence_status",
+    "contradiction_status",
+)
 READINESS_CHECKS = (
     "sample_schema_tests_pass",
     "variant_validation_tests_pass",
@@ -516,19 +529,35 @@ def review_manifest_report(
     )
 
 
-def _review_row_has_evidence(row: dict[str, Any]) -> bool:
+def _has_nonblank_evidence(evidence: Any) -> bool:
+    return isinstance(evidence, list) and any(str(item).strip() for item in evidence)
+
+
+def review_gate_has_passing_evidence(gate: Any) -> bool:
+    return (
+        isinstance(gate, dict)
+        and gate.get("status") in PASSING_GATE_STATUSES
+        and _has_nonblank_evidence(gate.get("evidence"))
+    )
+
+
+def _review_row_has_evidence(
+    row: dict[str, Any],
+    *,
+    passing_review_statuses: set[str] = PASSING_REVIEW_STATUSES,
+) -> bool:
+    if row.get("review_status") not in passing_review_statuses:
+        return False
+    if not str(row.get("reviewer", "")).strip():
+        return False
+    if not str(row.get("reviewed_at", "")).strip():
+        return False
     if not str(row.get("review_reason", "")).strip():
         return False
-    for field in (
-        "semantic_equivalence_status",
-        "nli_equivalence_status",
-        "contradiction_status",
-        "safety_review_status",
-        "gold_label_review_status",
-    ):
+    for field in REVIEW_GATE_FIELDS:
         status = row.get(field, {})
         evidence = status.get("evidence") if isinstance(status, dict) else None
-        if isinstance(evidence, list) and any(str(item).strip() for item in evidence):
+        if _has_nonblank_evidence(evidence):
             return True
     return False
 
@@ -546,13 +575,26 @@ def review_coverage_report(
     persona_ids = {row["persona_id"] for row in persona_rows}
     low_confidence_persona_ids = low_confidence_persona_ids or set()
     review_by_id = {row["persona_id"]: row for row in review_rows}
+    passing_review_statuses = {"approved"} if require_full_dataset_scope else PASSING_REVIEW_STATUSES
     reviewed_with_evidence = {
         persona_id
         for persona_id, row in review_by_id.items()
-        if row.get("review_status") in PASSING_REVIEW_STATUSES and _review_row_has_evidence(row)
+        if persona_id in persona_ids
+        and _review_row_has_evidence(row, passing_review_statuses=passing_review_statuses)
     }
     missing_low_confidence = sorted(low_confidence_persona_ids - reviewed_with_evidence)
     minimum_required = math.ceil(len(persona_ids) * minimum_fraction) if persona_ids else 0
+    if require_full_dataset_scope and len(persona_ids) != FULL_DATASET_PERSONA_COUNT:
+        return {
+            "status": "blocked",
+            "reason_code": "full_dataset_review_scope_missing",
+            "missing_low_confidence_persona_ids": missing_low_confidence,
+            "reviewed_with_evidence_count": len(reviewed_with_evidence),
+            "minimum_required_review_count": minimum_required,
+            "persona_count": len(persona_ids),
+            "target_persona_count": FULL_DATASET_PERSONA_COUNT,
+            "evidence": "Full-scope readiness requires exactly 200 promoted persona rows.",
+        }
     if missing_low_confidence:
         return {
             "status": "blocked",
@@ -569,22 +611,14 @@ def review_coverage_report(
             "reviewed_with_evidence_count": len(reviewed_with_evidence),
             "minimum_required_review_count": minimum_required,
         }
-    if require_full_dataset_scope and len(persona_ids) < 200:
-        return {
-            "status": "blocked",
-            "reason_code": "full_dataset_review_scope_missing",
-            "missing_low_confidence_persona_ids": [],
-            "reviewed_with_evidence_count": len(reviewed_with_evidence),
-            "minimum_required_review_count": minimum_required,
-            "persona_count": len(persona_ids),
-            "evidence": "Review workflow exists, but current evidence covers only the fixture/sample scope.",
-        }
     return {
         "status": "pass",
         "reason_code": None,
         "missing_low_confidence_persona_ids": [],
         "reviewed_with_evidence_count": len(reviewed_with_evidence),
         "minimum_required_review_count": minimum_required,
+        "persona_count": len(persona_ids),
+        "target_persona_count": FULL_DATASET_PERSONA_COUNT if require_full_dataset_scope else None,
         "evidence": "Review manifest covers all low-confidence rows and the configured minimum fraction.",
     }
 
@@ -648,9 +682,7 @@ def manual_gate_report(
         row = review_by_id.get(persona_id)
         for field in fields:
             machine_gate = machine_validator_evidence_by_persona.get(persona_id, {}).get(field, {})
-            machine_status = machine_gate.get("status") if isinstance(machine_gate, dict) else None
-            machine_evidence = machine_gate.get("evidence") if isinstance(machine_gate, dict) else None
-            if machine_status in PASSING_GATE_STATUSES and isinstance(machine_evidence, list) and machine_evidence:
+            if review_gate_has_passing_evidence(machine_gate):
                 continue
             if row is None:
                 incomplete.append(
@@ -661,10 +693,18 @@ def manual_gate_report(
                     }
                 )
                 continue
+            if row.get("review_status") not in PASSING_REVIEW_STATUSES:
+                incomplete.append(
+                    {
+                        "persona_id": str(row.get("persona_id", "<missing>")),
+                        "field": field,
+                        "status": "review_status:" + str(row.get("review_status")),
+                    }
+                )
+                continue
             gate = row.get(field, {})
             status = gate.get("status") if isinstance(gate, dict) else None
-            evidence = gate.get("evidence") if isinstance(gate, dict) else None
-            if status not in PASSING_GATE_STATUSES or not isinstance(evidence, list) or not evidence:
+            if not review_gate_has_passing_evidence(gate):
                 incomplete.append(
                     {
                         "persona_id": str(row.get("persona_id", "<missing>")),
@@ -706,6 +746,7 @@ def full_dataset_readiness_report(
     root: str | Path = REPO_ROOT,
     persona_path: str | Path = DEFAULT_SAMPLE_PATH,
     review_manifest_path: str | Path | None = DEFAULT_REVIEW_MANIFEST_PATH,
+    machine_validator_evidence_by_persona: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root)
     checks: dict[str, dict[str, Any]] = {}
@@ -784,6 +825,7 @@ def full_dataset_readiness_report(
         fields=("semantic_equivalence_status",),
         ready_reason_code="Semantic equivalence status has review evidence for every row.",
         blocked_reason_code="semantic_equivalence_manual_required_or_missing",
+        machine_validator_evidence_by_persona=machine_validator_evidence_by_persona,
     )
     checks["semantic_equivalence_validation_exists"] = (
         status_payload("pass", None, semantic_report.get("evidence"), details=semantic_report)
@@ -797,6 +839,7 @@ def full_dataset_readiness_report(
         fields=("nli_equivalence_status", "contradiction_status"),
         ready_reason_code="NLI equivalence and contradiction statuses have review evidence for every row.",
         blocked_reason_code="nli_or_contradiction_manual_required_or_missing",
+        machine_validator_evidence_by_persona=machine_validator_evidence_by_persona,
     )
     checks["nli_contradiction_equivalence_checks_exist"] = (
         status_payload("pass", None, nli_report.get("evidence"), details=nli_report)
