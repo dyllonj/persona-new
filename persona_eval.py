@@ -1253,10 +1253,6 @@ def serialize_persona_for_adherence(persona_row: dict[str, Any]) -> str:
     )
 
 
-def persona_adherence_hash(persona_row: dict[str, Any]) -> str:
-    return sha256_text(serialize_persona_for_adherence(persona_row))
-
-
 def sparse_cosine(left: dict[str, float], right: dict[str, float]) -> float:
     if not left or not right:
         return 0.0

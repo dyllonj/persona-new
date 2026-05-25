@@ -5,9 +5,11 @@
 This repository is a fixture-first persona-drift evaluation harness. The current
 implemented path validates the 10-row sample dataset, plans generation counts,
 runs deterministic local mock outputs, and aggregates mock results at the
-persona level. Sprint 5 adds deterministic readiness validators, review
-manifests, and report schemas. It is still not ready to generate the
-200-persona full dataset or run a 4,800-call full benchmark.
+persona level. It now includes deterministic candidate generation/selection,
+promotion dry-run gates, Sprint 8 smoke-run scaffolding, and phase-aware
+dev/full run guardrails. It is still not ready to run the 50-persona dev pass or
+the 4,800-call full benchmark until Sprint 7 promotion and Sprint 8 smoke
+evidence exist.
 
 ## Setup
 
@@ -135,6 +137,18 @@ missing provenance, missing variants, invalid variant counts, and any candidate
 path under `data/`. Generated candidate pools and manifests remain ignored by
 git; only `candidates/.gitignore` and `candidates/README.md` are tracked.
 
+Batch R added a diversity selector for promotion prep:
+
+```bash
+python3 candidate_generation.py select \
+  --candidate-path candidates/sprint7_candidates.jsonl \
+  --out candidates/sprint7_selected_candidates.jsonl \
+  --count 200
+```
+
+The selected candidate file is still not benchmark data. It must pass Sprint 7
+promotion with full review evidence before anything is written under `data/`.
+
 ## Token-KL Rules
 
 Canonical Token-KL is aggregated only when `metrics.token_kl.status` is `ok`.
@@ -155,7 +169,8 @@ backend, contradiction judge, and calibration fixture are pinned.
 
 ## Full Dataset Gate
 
-Do not create `data/personas.full.jsonl` until the readiness report is `ready`.
+Do not create `data/personas.full.jsonl` until the promotion/readiness reports
+are `ready`.
 Run the readiness gate directly with:
 
 ```bash
@@ -199,11 +214,11 @@ The review manifest is JSONL. Each row is validated by
 The current sample manifest is `reviews/personas.sample.review.jsonl`. It is a
 contract fixture, not full-dataset approval evidence.
 
-Full dataset generation is still blocked because semantic equivalence, NLI
-equivalence, contradiction checks, embedding-cluster dedupe review, and
-full-dataset review coverage remain `manual_required` or sample-scoped. These
-states are intentional; mock or fixture checks must not be promoted to real
-semantic validation.
+Full dataset generation is currently blocked because no full 200-row review
+manifest exists. Semantic equivalence, NLI equivalence, contradiction, safety,
+and gold-label evidence must cover every promoted row unless a real validator
+supplies equivalent evidence. Mock or fixture checks must not be promoted to
+real semantic validation.
 
 Unvalidated candidate pools must stay outside `data/`. Use `candidates/` for
 local candidate pools; it is ignored by git. Do not commit candidate pools or
@@ -225,11 +240,29 @@ restricted categories are absent, duplicate candidates are absent, and all
 manual semantic/NLI/contradiction/safety/gold-label gates have passing evidence.
 Non-dry writes are refused unless every gate passes.
 
-## Full Run Gate
+Current expected Sprint 7 input is the selected candidate pool:
 
-Do not run the full `4,800`-call benchmark until a 20-persona smoke run has
-completed and flagged outputs have been reviewed. Current non-dry staged runs
-are capped at 20 personas.
+```bash
+python3 dataset_promotion.py promote \
+  --candidate-path candidates/sprint7_selected_candidates.jsonl \
+  --review-path reviews/personas.full.review.jsonl \
+  --out data/personas.full.jsonl \
+  --dry-run
+```
+
+## Dev And Full Run Gates
+
+Do not run the 50-persona dev pass until:
+
+- `data/personas.full.jsonl` exists through Sprint 7 promotion.
+- The promotion manifest and full review manifest exist.
+- Sprint 8 smoke evidence exists and flagged outputs have been reviewed.
+- A dev approval/override artifact exists.
+
+Do not run the full `4,800`-call benchmark until the dev pass has completed and
+explicit full-run approval exists. Non-dry run caps are phase-aware: smoke is
+capped at 20 personas, dev at 50, and full at 200, with evidence gates for each
+phase.
 
 ## Autoresearch Verification
 
@@ -251,11 +284,16 @@ Autoresearch logs are local verification artifacts and are ignored by git.
 
 ## Exact Next Command
 
-After Sprint 5, the next implementation command is:
+After Batch R, the next implementation task is to create the full review
+manifest for the selected 200 candidates, then run promotion dry-run:
 
 ```bash
-python3 dataset_readiness.py --persona-path data/personas.sample.jsonl --review-manifest reviews/personas.sample.review.jsonl --json
+python3 dataset_promotion.py promote \
+  --candidate-path candidates/sprint7_selected_candidates.jsonl \
+  --review-path reviews/personas.full.review.jsonl \
+  --out data/personas.full.jsonl \
+  --dry-run
 ```
 
-Use the JSON output to close the remaining `manual_required` gates before any
-full dataset generation starts.
+If the review manifest is missing, this command should remain blocked. That is
+the correct current state.

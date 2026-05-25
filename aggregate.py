@@ -14,9 +14,8 @@ import random
 import sys
 from typing import Any
 
-from dataset_readiness import READINESS_CHECKS, full_dataset_readiness_report
+from dataset_readiness import full_dataset_readiness_report
 from persona_eval import (
-    PERSONA_SCHEMA_PATH,
     PersonaValidationError,
     hash_file_bytes,
     load_jsonl,
@@ -525,14 +524,6 @@ def summarize_output_deltas(rows: list[dict[str, Any]]) -> dict[str, Any]:
             [pair[1] for pair in pass_pairs],
         ),
         "note": "Base/tuned output fields are matched within each result row, averaged inside persona_id, then compared across personas.",
-    }
-
-
-def readiness_status(status: str, reason_code: str | None, evidence: str | None = None) -> dict[str, Any]:
-    return {
-        "status": status,
-        "reason_code": reason_code,
-        "evidence": evidence,
     }
 
 
