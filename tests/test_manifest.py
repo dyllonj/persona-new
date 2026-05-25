@@ -6,6 +6,8 @@ from pathlib import Path
 from persona_eval import (
     CACHE_KEY_FIELDS,
     EVALUATOR_VERSION,
+    EXTRACTOR_VERSION,
+    METRIC_VERSION,
     MockAdapter,
     PersonaValidationError,
     RESULT_ROW_SCHEMA_PATH,
@@ -494,8 +496,10 @@ class CacheKeyTests(unittest.TestCase):
         with self.assertRaises(PersonaValidationError):
             cache_key_from_payload(payload)
 
-    def test_evaluator_version_tracks_sprint2_metric_semantics(self):
-        self.assertEqual(EVALUATOR_VERSION, "sprint2")
+    def test_version_constants_split_harness_from_metric_semantics(self):
+        self.assertEqual(EVALUATOR_VERSION, "sprint3")
+        self.assertEqual(METRIC_VERSION, "sprint2")
+        self.assertEqual(EXTRACTOR_VERSION, "sprint2")
 
 
 if __name__ == "__main__":

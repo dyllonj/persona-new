@@ -126,6 +126,9 @@ class RunCliTests(unittest.TestCase):
             self.assertEqual(manifest["provider_or_endpoint"], "local_mock")
             self.assertEqual(manifest["scoring_capability"], "none")
             self.assertEqual(manifest["seeds"], [1])
+            self.assertEqual(manifest["harness_version"], "sprint3")
+            self.assertEqual(manifest["metric_version"], "sprint2")
+            self.assertEqual(manifest["extractor_version"], "sprint2")
 
             result_rows = [
                 json.loads(line)
@@ -182,6 +185,50 @@ class RunCliTests(unittest.TestCase):
                 self.assertEqual(row["metrics"]["token_kl"]["status"], "not_applicable")
                 self.assertEqual(row["metrics"]["token_kl"]["reason_code"], "disabled_by_user")
                 self.assertEqual(row["metrics"]["token_kl"]["scoring_path"], "none")
+
+    def test_run_rejects_limit_personas_above_sprint3_execution_cap(self):
+        sample_rows = [
+            json.loads(line)
+            for line in SAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        expanded_rows = []
+        for index in range(21):
+            row = json.loads(json.dumps(sample_rows[index % len(sample_rows)]))
+            row["persona_id"] = f"expanded_{index:03d}"
+            row["source"]["source_persona_id"] = f"expanded_source_{index:03d}"
+            for variant_index, variant in enumerate(row["variants"]):
+                variant["variant_id"] = f"expanded_{index:03d}_v{variant_index}"
+            expanded_rows.append(row)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            persona_path = Path(tmp) / "expanded.jsonl"
+            out = Path(tmp) / "blocked-run"
+            persona_path.write_text(
+                "\n".join(json.dumps(row) for row in expanded_rows) + "\n",
+                encoding="utf-8",
+            )
+            completed = self.run_cli(
+                "run",
+                "--persona-path",
+                str(persona_path),
+                "--out",
+                str(out),
+                "--adapter",
+                "mock",
+                "--model-base",
+                "base",
+                "--model-tuned",
+                "tuned",
+                "--seeds",
+                "1",
+                "--limit-personas",
+                "21",
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("capped at 20 personas", completed.stderr)
+            self.assertFalse(out.exists())
 
     def test_vllm_adapter_requires_explicit_base_url(self):
         completed = self.run_cli(

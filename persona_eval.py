@@ -34,7 +34,10 @@ RUN_MANIFEST_SCHEMA_PATH = REPO_ROOT / "schemas" / "run_manifest.schema.json"
 RESULT_ROW_SCHEMA_PATH = REPO_ROOT / "schemas" / "result_row.schema.json"
 
 PROMPT_TEMPLATE_VERSION = "v1"
-EVALUATOR_VERSION = "sprint2"
+EVALUATOR_VERSION = "sprint3"
+METRIC_VERSION = "sprint2"
+EXTRACTOR_VERSION = "sprint2"
+STAGED_RUN_MAX_PERSONAS = 20
 DEFAULT_SYSTEM_PROMPT = "\n".join(
     [
         "You are participating in a persona-drift evaluation.",
@@ -2006,6 +2009,14 @@ def _limited_rows(rows: list[dict[str, Any]], limit: int | None) -> list[dict[st
     return rows[:limit]
 
 
+def _enforce_staged_execution_cap(persona_count: int) -> None:
+    if persona_count > STAGED_RUN_MAX_PERSONAS:
+        raise PersonaValidationError(
+            f"Sprint 3 run execution is capped at {STAGED_RUN_MAX_PERSONAS} personas; "
+            "use plan/dry-run for larger arithmetic until the full-run gate exists"
+        )
+
+
 def _run_persona_shape(args: argparse.Namespace) -> tuple[list[dict[str, Any]] | None, int, int]:
     if args.persona_path:
         rows = _limited_rows(validate_personas(args.persona_path), args.limit_personas)
@@ -2281,8 +2292,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 0
     if rows is None:
         raise PersonaValidationError("non-dry run requires --persona-path")
-    if persona_count >= 200 and args.limit_personas is None:
-        raise PersonaValidationError("full 200-persona runs are gated; use --limit-personas for staged smoke runs")
+    _enforce_staged_execution_cap(persona_count)
 
     output_dir = _run_output_dir(args)
     run_id = args.run_id or dt.datetime.now(dt.UTC).strftime("run-%Y%m%dT%H%M%SZ")
@@ -2300,10 +2310,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         scoring_capability=adapter.scoring_capability,
         decoding_params=decoding_params,
         stop_sequences=stop_sequences,
-        extractor_version=EVALUATOR_VERSION,
+        extractor_version=EXTRACTOR_VERSION,
         embedding_model_revision="not_available",
         nli_or_judge_model_revision="not_available",
     )
+    manifest["harness_version"] = EVALUATOR_VERSION
+    manifest["metric_version"] = METRIC_VERSION
     manifest["model_base_alias"] = args.model_base_alias
     manifest["model_tuned_alias"] = args.model_tuned_alias
     manifest["score_mode"] = "disabled" if args.disable_token_kl else args.score_mode
