@@ -31,19 +31,28 @@ class ModelMatrixTests(unittest.TestCase):
                     model["provider_or_endpoint"] = "http://localhost:8000/v1"
                     model["required_revision_or_hash"] = f"{model['model_id']}-revision"
                     model["license_review_status"] = "approved"
-                    model["license_review_evidence"] = ["fixture license review approval"]
+                    model["license_reviewed_by"] = "fixture_reviewer"
+                    model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+                    model["license_terms_url"] = "https://example.local/license"
+                    model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
         for model in matrix["standalone_instruct_models"]:
             model["provider_or_endpoint"] = "http://localhost:8000/v1"
             model["required_revision_or_hash"] = f"{model['model_id']}-revision"
             model["license_review_status"] = "approved"
-            model["license_review_evidence"] = ["fixture license review approval"]
+            model["license_reviewed_by"] = "fixture_reviewer"
+            model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+            model["license_terms_url"] = "https://example.local/license"
+            model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
         for comparison in matrix["cross_family_comparisons"]:
             for model_key in ("left_model", "right_model"):
                 model = comparison[model_key]
                 model["provider_or_endpoint"] = "http://localhost:8000/v1"
                 model["required_revision_or_hash"] = f"{model['model_id']}-revision"
                 model["license_review_status"] = "approved"
-                model["license_review_evidence"] = ["fixture license review approval"]
+                model["license_reviewed_by"] = "fixture_reviewer"
+                model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+                model["license_terms_url"] = "https://example.local/license"
+                model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
 
     def test_valid_qwen_same_family_drift_pair_template_passes(self):
         matrix = self.load_matrix()
@@ -100,11 +109,27 @@ class ModelMatrixTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelMatrixValidationError, "template_status must be real_run_ready"):
             validate_model_matrix(matrix, require_real_run_ready=True)
 
+    def test_real_run_readiness_requires_top_level_real_run_ready_true(self):
+        matrix = self.load_matrix()
+        self.make_runtime_ready_values(matrix)
+        matrix["template_status"] = "real_run_ready"
+        matrix["real_run_ready"] = False
+
+        with self.assertRaisesRegex(ModelMatrixValidationError, "real_run_ready must be true"):
+            validate_model_matrix(matrix, require_real_run_ready=True)
+
     def test_license_review_required_blocks_real_run_readiness_without_evidence(self):
         matrix = self.load_matrix()
         self.make_runtime_ready_values(matrix)
         del matrix["drift_pairs"][0]["base_model"]["license_review_status"]
-        del matrix["drift_pairs"][0]["base_model"]["license_review_evidence"]
+
+        with self.assertRaisesRegex(ModelMatrixValidationError, "license review evidence"):
+            validate_model_matrix(matrix, require_real_run_ready=True)
+
+    def test_license_review_required_blocks_real_run_readiness_without_structured_evidence(self):
+        matrix = self.load_matrix()
+        self.make_runtime_ready_values(matrix)
+        del matrix["drift_pairs"][0]["base_model"]["license_reviewed_by"]
 
         with self.assertRaisesRegex(ModelMatrixValidationError, "license review evidence"):
             validate_model_matrix(matrix, require_real_run_ready=True)

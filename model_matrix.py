@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import datetime as dt
 from typing import Any
 
 try:
@@ -41,7 +42,15 @@ MODEL_RUNTIME_PLACEHOLDER_FIELDS = (
     "provider_or_endpoint",
     "required_revision_or_hash",
 )
-PASSING_LICENSE_REVIEW_STATUSES = {"approved", "not_required"}
+LICENSE_REVIEW_REQUIRED_FIELDS = (
+    "license_reviewed_by",
+    "license_reviewed_at",
+    "redistribution_or_usage_notes",
+)
+LICENSE_REVIEW_SOURCE_FIELDS = (
+    "license_terms_url",
+    "license_source_url",
+)
 SAME_FAMILY_ALIGNMENT_REQUIREMENTS = (
     "same_tokenizer_family_required",
     "same_vocabulary_required",
@@ -94,6 +103,31 @@ def _is_placeholder(value: Any) -> bool:
         or "fill-from" in lowered
         or "placeholder" in lowered
     )
+
+
+def _is_review_timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or _is_placeholder(value):
+        return False
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        dt.datetime.fromisoformat(normalized)
+        return True
+    except ValueError:
+        pass
+    try:
+        dt.date.fromisoformat(value.strip())
+        return True
+    except ValueError:
+        return False
+
+
+def _is_http_url(value: Any) -> bool:
+    if not isinstance(value, str) or _is_placeholder(value):
+        return False
+    stripped = value.strip()
+    return stripped.startswith("https://") or stripped.startswith("http://")
 
 
 def _model_entries(matrix: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -201,14 +235,18 @@ def _license_review_blocking_paths(matrix: dict[str, Any]) -> list[str]:
         if model.get("license_review_required") is not True:
             continue
         status = model.get("license_review_status")
-        evidence = model.get("license_review_evidence")
-        if status not in PASSING_LICENSE_REVIEW_STATUSES:
+        if status != "approved":
             blockers.append(f"{path}.license_review_status")
-            continue
-        if status == "approved" and (
-            not isinstance(evidence, list) or not any(isinstance(item, str) and item.strip() for item in evidence)
-        ):
-            blockers.append(f"{path}.license_review_evidence")
+        for field in LICENSE_REVIEW_REQUIRED_FIELDS:
+            value = model.get(field)
+            if field == "license_reviewed_at":
+                if not _is_review_timestamp(value):
+                    blockers.append(f"{path}.{field}")
+                continue
+            if not isinstance(value, str) or _is_placeholder(value):
+                blockers.append(f"{path}.{field}")
+        if not any(_is_http_url(model.get(field)) for field in LICENSE_REVIEW_SOURCE_FIELDS):
+            blockers.append(f"{path}.license_terms_url_or_license_source_url")
     return sorted(blockers)
 
 

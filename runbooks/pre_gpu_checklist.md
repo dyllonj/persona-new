@@ -64,7 +64,10 @@ Collect these values before any real smoke command:
 - `gpu_cuda_driver`: GPU model, CUDA version, driver version, and visible device count.
 - `base_url`: shared local OpenAI-compatible endpoint, or both `base_url_base` and `base_url_tuned`.
 - `model_matrix_entry`: selected production/open matrix entry, if a run is bound to the matrix.
-- `license_review_status` and `license_review_evidence`: completed evidence for every matrix model with `license_review_required: true`.
+- `license_review_status: approved`, `license_reviewed_by`,
+  `license_reviewed_at`, `license_terms_url` or `license_source_url`, and
+  `redistribution_or_usage_notes` for every matrix model with
+  `license_review_required: true`.
 - `decoding_params`: temperature `0.0`, max tokens `140`.
 - `seeds`: smoke `1`; dev/full `1,2`.
 - `raw_request_response_logging_status`: must be `enabled`.

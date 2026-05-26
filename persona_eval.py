@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 import urllib.error
+from urllib.parse import urlparse
 import urllib.request
 
 from model_matrix import load_model_matrix, resolve_model_matrix_entry, validate_model_matrix
@@ -89,6 +90,9 @@ FULL_RUN_REQUIRED_RUNTIME_ARGS = (
     "tokenizer_hash",
     "chat_template_hash",
     "serving_stack_version",
+)
+SMOKE_RUN_REQUIRED_RUNTIME_ARGS = FULL_RUN_REQUIRED_RUNTIME_ARGS + (
+    "gpu_cuda_driver",
 )
 FULL_RUN_REQUIRED_MANIFEST_FIELDS = (
     "code_commit",
@@ -236,8 +240,10 @@ EXPLICIT_REAL_RUN_METADATA_FIELDS = (
     "tokenizer_hash",
     "chat_template_hash",
     "serving_stack_version",
+    "gpu_cuda_driver",
     "promotion_manifest_path",
 )
+LOCAL_ENDPOINT_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class PersonaValidationError(ValueError):
@@ -2077,6 +2083,15 @@ def build_result_row(
         },
         "flags": flags or [],
     }
+    if "model_matrix_entry_id" in model_pair:
+        result_row["model_matrix_path"] = model_pair.get("model_matrix_path")
+        result_row["model_matrix_hash"] = model_pair.get("model_matrix_hash")
+        result_row["model_matrix_entry_id"] = model_pair.get("model_matrix_entry_id")
+        result_row["model_matrix_entry_type"] = model_pair.get("model_matrix_entry_type")
+        result_row["comparison_type"] = model_pair.get("comparison_type")
+        result_row["token_kl_applicability"] = model_pair.get("token_kl_applicability")
+        result_row["token_kl_reason_code"] = model_pair.get("token_kl_reason_code")
+        result_row["metric_applicability"] = model_pair.get("metric_applicability")
     validate_result_row(result_row)
     return result_row
 
@@ -2235,8 +2250,49 @@ def _require_smoke_promoted_dataset_gate(args: argparse.Namespace) -> None:
     validate_dataset_promotion_manifest(promotion_manifest, persona_path=persona_path)
 
 
-def _is_missing_explicit_metadata(value: str | None) -> bool:
-    return value is None or not value.strip() or value.strip() == "not_available"
+def _is_local_http_endpoint(value: str | None) -> bool:
+    if value is None or not value.strip():
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in LOCAL_ENDPOINT_HOSTS
+
+
+def _require_local_endpoint_args(args: argparse.Namespace, label: str) -> None:
+    base_url, tuned_url = _real_adapter_base_urls(args)
+    for endpoint_label, endpoint in (("base", base_url), ("tuned", tuned_url)):
+        if not _is_local_http_endpoint(endpoint):
+            raise PersonaValidationError(
+                f"{label} requires a local {endpoint_label} endpoint; got {endpoint!r}"
+            )
+
+
+def _require_runtime_metadata(args: argparse.Namespace, fields: tuple[str, ...], label: str) -> None:
+    missing = [
+        f"--{field.replace('_', '-')}"
+        for field in fields
+        if _runtime_value_is_placeholder(getattr(args, field, None))
+    ]
+    if missing:
+        raise PersonaValidationError(
+            f"{label} requires explicit runtime metadata: " + ", ".join(missing)
+        )
+
+
+def _enforce_smoke_token_kl_disabled(args: argparse.Namespace) -> None:
+    if getattr(args, "stage", None) != "smoke" and _run_stage_from_args(args) != "smoke":
+        return
+    if _score_mode_from_args(args) != "disabled":
+        raise PersonaValidationError(
+            "Sprint 8 smoke requires --disable-token-kl or --score-mode disabled"
+        )
+
+
+def _enforce_smoke_runtime_policy(args: argparse.Namespace) -> None:
+    if getattr(args, "stage", None) != "smoke" and _run_stage_from_args(args) != "smoke":
+        return
+    if getattr(args, "adapter", "vllm") != "vllm":
+        raise PersonaValidationError("Sprint 8 smoke requires --adapter vllm")
+    _enforce_smoke_token_kl_disabled(args)
 
 
 def _require_real_adapter_run_contract(args: argparse.Namespace) -> None:
@@ -2249,16 +2305,16 @@ def _require_real_adapter_run_contract(args: argparse.Namespace) -> None:
             "real vLLM/openai-compatible runs require "
             "--persona-path data/personas.full.jsonl after Sprint 7 promotion"
         )
-    missing = [
-        f"--{field.replace('_', '-')}"
-        for field in EXPLICIT_REAL_RUN_METADATA_FIELDS
-        if _is_missing_explicit_metadata(getattr(args, field, None))
-    ]
-    if missing:
+    if not _model_matrix_args_present(args):
         raise PersonaValidationError(
-            "real vLLM/openai-compatible smoke runs require explicit runtime metadata: "
-            + ", ".join(missing)
+            "real vLLM/openai-compatible runs require --model-matrix and --model-matrix-entry"
         )
+    _require_local_endpoint_args(args, "real vLLM/openai-compatible runs")
+    _require_runtime_metadata(
+        args,
+        EXPLICIT_REAL_RUN_METADATA_FIELDS,
+        "real vLLM/openai-compatible smoke runs",
+    )
 
 
 def _load_json_object(path: str | Path, label: str) -> dict[str, Any]:
@@ -2480,6 +2536,27 @@ def _require_plan_shape(
     return planned_calls
 
 
+def _require_smoke_plan_shape(
+    *,
+    persona_count: int,
+    variants_per_persona: int,
+    model_count: int,
+    seed_count: int,
+) -> int:
+    if persona_count != SMOKE_RUN_PERSONA_COUNT:
+        raise PersonaValidationError(f"smoke preflight requires persona_count={SMOKE_RUN_PERSONA_COUNT}")
+    if variants_per_persona != RUN_VARIANTS_PER_PERSONA:
+        raise PersonaValidationError(f"smoke preflight requires variants_per_persona={RUN_VARIANTS_PER_PERSONA}")
+    if model_count != RUN_MODEL_COUNT:
+        raise PersonaValidationError(f"smoke preflight requires model_count={RUN_MODEL_COUNT}")
+    if seed_count != SMOKE_RUN_SEED_COUNT:
+        raise PersonaValidationError(f"smoke preflight requires seed_count={SMOKE_RUN_SEED_COUNT}")
+    planned_calls = expected_call_count(persona_count, variants_per_persona, model_count, seed_count)
+    if planned_calls != SMOKE_RUN_CALL_COUNT:
+        raise PersonaValidationError(f"smoke preflight planned call count must equal {SMOKE_RUN_CALL_COUNT}")
+    return planned_calls
+
+
 def _runtime_value_is_placeholder(value: Any) -> bool:
     if not isinstance(value, str):
         return True
@@ -2488,6 +2565,8 @@ def _runtime_value_is_placeholder(value: Any) -> bool:
     return (
         lowered in PLACEHOLDER_RUNTIME_VALUES
         or (stripped.startswith("<") and stripped.endswith(">"))
+        or "fill-from" in lowered
+        or "placeholder" in lowered
     )
 
 
@@ -2616,6 +2695,30 @@ def validate_dev_preflight(
     validate_dev_run_approval(dev_run_approval, persona_path=args.persona_path)
     matrix_policy = _resolve_model_matrix_policy_for_args(args, require_real_run_ready=True)
     _enforce_model_matrix_token_kl_policy(args, matrix_policy)
+    return planned_calls
+
+
+def validate_smoke_preflight(
+    args: argparse.Namespace,
+    *,
+    persona_count: int,
+    variants_per_persona: int,
+    persona_rows: list[dict[str, Any]] | None = None,
+) -> int:
+    planned_calls = _require_smoke_plan_shape(
+        persona_count=persona_count,
+        variants_per_persona=variants_per_persona,
+        model_count=args.model_count,
+        seed_count=args.seed_count,
+    )
+    _require_smoke_promoted_dataset_gate(args)
+    _require_runtime_metadata(args, SMOKE_RUN_REQUIRED_RUNTIME_ARGS, "smoke preflight")
+    _require_local_endpoint_args(args, "smoke preflight")
+    if not _model_matrix_args_present(args):
+        raise PersonaValidationError("smoke preflight requires --model-matrix and --model-matrix-entry")
+    matrix_policy = _resolve_model_matrix_policy_for_args(args, require_real_run_ready=True)
+    _enforce_model_matrix_token_kl_policy(args, matrix_policy)
+    _enforce_smoke_runtime_policy(args)
     return planned_calls
 
 
@@ -2941,8 +3044,12 @@ def _build_run_rows(
     }
     matrix_policy = getattr(args, "model_matrix_policy", None)
     if matrix_policy is not None:
+        model_pair["model_matrix_path"] = matrix_policy.get("matrix_path")
+        model_pair["model_matrix_hash"] = matrix_policy.get("matrix_hash")
         model_pair["model_matrix_entry"] = matrix_policy.get("entry_id")
+        model_pair["model_matrix_entry_id"] = matrix_policy.get("entry_id")
         model_pair["model_matrix_entry_type"] = matrix_policy.get("entry_type")
+        model_pair["comparison_type"] = matrix_policy.get("comparison_type")
         model_pair["token_kl_applicability"] = matrix_policy.get("token_kl_applicability")
         model_pair["token_kl_reason_code"] = matrix_policy.get("token_kl_reason_code")
         model_pair["metric_applicability"] = matrix_policy.get("metric_applicability")
@@ -3086,7 +3193,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 def cmd_preflight(args: argparse.Namespace) -> int:
     rows, persona_count, variants_per_persona = _preflight_shape(args)
-    if args.stage == "dev":
+    if args.stage == "smoke":
+        planned_calls = validate_smoke_preflight(
+            args,
+            persona_count=persona_count,
+            variants_per_persona=variants_per_persona,
+            persona_rows=rows,
+        )
+    elif args.stage == "dev":
         planned_calls = validate_dev_preflight(
             args,
             persona_count=persona_count,
@@ -3149,7 +3263,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             variants_per_persona=variants_per_persona,
             seed_count=len(seeds),
         )
+        _enforce_smoke_runtime_policy(args)
     if args.dry_run:
+        _enforce_smoke_runtime_policy(args)
         print(f"planned_generation_calls={planned_calls}")
         return 0
     _require_real_adapter_run_contract(args)
@@ -3193,9 +3309,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         manifest["model_matrix_path"] = matrix_policy.get("matrix_path")
         manifest["model_matrix_hash"] = matrix_policy.get("matrix_hash")
         manifest["model_matrix_entry"] = matrix_policy.get("entry_id")
+        manifest["model_matrix_entry_id"] = matrix_policy.get("entry_id")
         manifest["model_matrix_entry_type"] = matrix_policy.get("entry_type")
+        manifest["model_matrix_comparison_type"] = matrix_policy.get("comparison_type")
+        manifest["comparison_type"] = matrix_policy.get("comparison_type")
         manifest["model_matrix_token_kl_applicability"] = matrix_policy.get("token_kl_applicability")
+        manifest["token_kl_applicability"] = matrix_policy.get("token_kl_applicability")
         manifest["model_matrix_token_kl_reason_code"] = matrix_policy.get("token_kl_reason_code")
+        manifest["token_kl_reason_code"] = matrix_policy.get("token_kl_reason_code")
+        manifest["metric_applicability"] = matrix_policy.get("metric_applicability")
     validate_run_manifest(manifest)
 
     result_rows = _build_run_rows(
@@ -3243,7 +3365,7 @@ def build_parser() -> argparse.ArgumentParser:
         "preflight",
         help="validate dev/full run gates without executing model calls",
     )
-    preflight_parser.add_argument("--stage", choices=["dev", "full"], required=True)
+    preflight_parser.add_argument("--stage", choices=["smoke", "dev", "full"], required=True)
     preflight_parser.add_argument("--persona-path")
     preflight_parser.add_argument("--persona-count", type=int)
     preflight_parser.add_argument("--limit-personas", type=int)
@@ -3256,6 +3378,10 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--review-manifest")
     preflight_parser.add_argument("--dev-run-approval")
     preflight_parser.add_argument("--full-run-approval")
+    preflight_parser.add_argument("--adapter", choices=["vllm", "openai-compatible"], default="vllm")
+    preflight_parser.add_argument("--base-url", help="Shared OpenAI-compatible endpoint for both base and tuned calls")
+    preflight_parser.add_argument("--base-url-base", help="OpenAI-compatible endpoint for base model calls")
+    preflight_parser.add_argument("--base-url-tuned", help="OpenAI-compatible endpoint for tuned model calls")
     preflight_parser.add_argument("--model-base", default="not_available")
     preflight_parser.add_argument("--model-tuned", default="not_available")
     preflight_parser.add_argument("--model-base-revision-or-hash", default="not_available")
@@ -3264,6 +3390,7 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--tokenizer-hash", default="not_available")
     preflight_parser.add_argument("--chat-template-hash", default="not_available")
     preflight_parser.add_argument("--serving-stack-version", default="not_available")
+    preflight_parser.add_argument("--gpu-cuda-driver", default="not_available")
     preflight_parser.add_argument("--model-matrix")
     preflight_parser.add_argument("--model-matrix-entry")
     preflight_parser.add_argument(

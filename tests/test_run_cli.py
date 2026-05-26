@@ -39,7 +39,44 @@ class RunCliTests(unittest.TestCase):
             model["provider_or_endpoint"] = "http://localhost:8000/v1"
             model["required_revision_or_hash"] = f"{model['model_id']}-revision"
             model["license_review_status"] = "approved"
-            model["license_review_evidence"] = ["fixture license review approval"]
+            model["license_reviewed_by"] = "fixture_reviewer"
+            model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+            model["license_terms_url"] = "https://example.local/license"
+            model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
+        path.write_text(json.dumps(matrix, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    def write_ready_matrix(self, path):
+        matrix = load_model_matrix(MATRIX_PATH)
+        matrix["template_status"] = "real_run_ready"
+        matrix["real_run_ready"] = True
+        for pair in matrix["drift_pairs"]:
+            for model_key in ("base_model", "instruct_model"):
+                model = pair[model_key]
+                model["provider_or_endpoint"] = "http://localhost:8000/v1"
+                model["required_revision_or_hash"] = f"{model['model_id']}-revision"
+                model["license_review_status"] = "approved"
+                model["license_reviewed_by"] = "fixture_reviewer"
+                model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+                model["license_terms_url"] = "https://example.local/license"
+                model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
+        for model in matrix["standalone_instruct_models"]:
+            model["provider_or_endpoint"] = "http://localhost:8000/v1"
+            model["required_revision_or_hash"] = f"{model['model_id']}-revision"
+            model["license_review_status"] = "approved"
+            model["license_reviewed_by"] = "fixture_reviewer"
+            model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+            model["license_terms_url"] = "https://example.local/license"
+            model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
+        for comparison in matrix["cross_family_comparisons"]:
+            for model_key in ("left_model", "right_model"):
+                model = comparison[model_key]
+                model["provider_or_endpoint"] = "http://localhost:8000/v1"
+                model["required_revision_or_hash"] = f"{model['model_id']}-revision"
+                model["license_review_status"] = "approved"
+                model["license_reviewed_by"] = "fixture_reviewer"
+                model["license_reviewed_at"] = "2026-05-25T00:00:00Z"
+                model["license_terms_url"] = "https://example.local/license"
+                model["redistribution_or_usage_notes"] = "Fixture approval for local test execution."
         path.write_text(json.dumps(matrix, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     def test_run_dry_run_prints_sample_count_and_writes_nothing(self):
@@ -364,6 +401,108 @@ class RunCliTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("marks Token-KL not_applicable", completed.stderr)
 
+    def test_model_matrix_standalone_entry_blocks_canonical_token_kl_before_run(self):
+        completed = self.run_cli(
+            "run",
+            "--persona-count",
+            "20",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "mock",
+            "--model-base",
+            "base",
+            "--model-tuned",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "--model-matrix",
+            str(MATRIX_PATH),
+            "--model-matrix-entry",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "--seeds",
+            "1",
+            "--dry-run",
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("marks Token-KL not_applicable", completed.stderr)
+
+    def test_smoke_run_requires_disabled_token_kl_before_execution(self):
+        completed = self.run_cli(
+            "run",
+            "--run-stage",
+            "smoke",
+            "--persona-count",
+            "20",
+            "--variants-per-persona",
+            "6",
+            "--adapter",
+            "vllm",
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--model-base",
+            "Qwen/Qwen2.5-7B",
+            "--model-tuned",
+            "Qwen/Qwen2.5-7B-Instruct",
+            "--seeds",
+            "1",
+            "--dry-run",
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("Sprint 8 smoke requires --disable-token-kl", completed.stderr)
+
+    def test_smoke_preflight_resolves_qwen_model_matrix_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            matrix_path = Path(tmp) / "ready-qwen-matrix.json"
+            self.write_ready_qwen_matrix(matrix_path)
+            completed = self.run_cli(
+                "preflight",
+                "--stage",
+                "smoke",
+                "--persona-path",
+                str(ROOT / "data" / "personas.full.jsonl"),
+                "--limit-personas",
+                "20",
+                "--model-count",
+                "2",
+                "--seed-count",
+                "1",
+                "--promotion-manifest",
+                str(ROOT / "reports" / "dataset_promotion_manifest.json"),
+                "--adapter",
+                "vllm",
+                "--base-url",
+                "http://localhost:8000/v1",
+                "--model-base",
+                "Qwen/Qwen2.5-7B",
+                "--model-tuned",
+                "Qwen/Qwen2.5-7B-Instruct",
+                "--model-base-revision-or-hash",
+                "qwen-base-revision",
+                "--model-tuned-revision-or-hash",
+                "qwen-instruct-revision",
+                "--tokenizer-name",
+                "Qwen/Qwen2.5-7B",
+                "--tokenizer-hash",
+                "sha256:" + "1" * 64,
+                "--chat-template-hash",
+                "sha256:" + "2" * 64,
+                "--serving-stack-version",
+                "vllm-fixture",
+                "--gpu-cuda-driver",
+                "fixture-gpu-cuda-driver",
+                "--model-matrix",
+                str(matrix_path),
+                "--model-matrix-entry",
+                "qwen2_5_7b_base_vs_instruct",
+                "--disable-token-kl",
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("preflight_stage=smoke\n", completed.stdout)
+            self.assertIn("planned_generation_calls=240\n", completed.stdout)
+            self.assertIn("preflight_status=pass\n", completed.stdout)
+
     def test_model_matrix_policy_is_written_to_result_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -397,10 +536,22 @@ class RunCliTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["model_matrix_entry"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(manifest["model_matrix_entry_id"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(manifest["model_matrix_entry_type"], "drift_pair")
+            self.assertEqual(manifest["model_matrix_comparison_type"], "same_family_base_instruct")
             self.assertEqual(manifest["model_matrix_token_kl_applicability"], "canonical_possible")
+            self.assertEqual(manifest["token_kl_applicability"], "canonical_possible")
+            self.assertIn("metric_applicability", manifest)
             row = json.loads((out / "results.jsonl").read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(row["model_pair"]["model_matrix_entry"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(row["model_pair"]["model_matrix_entry_id"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(row["model_pair"]["model_matrix_entry_type"], "drift_pair")
+            self.assertEqual(row["model_pair"]["comparison_type"], "same_family_base_instruct")
             self.assertEqual(row["model_pair"]["token_kl_applicability"], "canonical_possible")
+            self.assertEqual(row["model_matrix_entry_id"], "qwen2_5_7b_base_vs_instruct")
+            self.assertEqual(row["comparison_type"], "same_family_base_instruct")
+            self.assertEqual(row["token_kl_applicability"], "canonical_possible")
+            self.assertIn("metric_applicability", row)
             validate_result_row(row)
 
 

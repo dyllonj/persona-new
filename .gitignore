@@ -10,4 +10,5 @@ candidates/*
 !candidates/.gitignore
 !candidates/README.md
 temp-GOAL.md
+.DS_Store
 

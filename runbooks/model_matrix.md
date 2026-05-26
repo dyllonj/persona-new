@@ -31,8 +31,13 @@ That command must fail until every `provider_or_endpoint` and
 `required_revision_or_hash` placeholder has been replaced with reproducible
 runtime values, `template_status` is changed to `real_run_ready`, top-level
 `real_run_ready` is `true`, and every model with `license_review_required: true`
-has explicit `license_review_status: approved` plus non-empty
-`license_review_evidence`.
+has structured license/access review evidence:
+
+- `license_review_status: approved`
+- `license_reviewed_by`
+- `license_reviewed_at`
+- `license_terms_url` or `license_source_url`
+- `redistribution_or_usage_notes`
 
 Template validation is not execution approval. A matrix with filled endpoints
 and revisions still blocks real-run readiness until the top-level ready flags
@@ -80,8 +85,9 @@ Runs can bind a selected matrix entry with:
 --model-matrix-entry qwen2_5_7b_base_vs_instruct
 ```
 
-When bound, the run manifest records the matrix path, hash, selected entry, and
-Token-KL applicability. Result rows carry the selected policy under
+When bound, the run manifest and result rows record the matrix path, hash,
+selected entry ID/type, comparison type, Token-KL applicability, Token-KL reason
+code, and metric applicability. Result rows also carry the selected policy under
 `model_pair`. Validation rejects
 `metrics.token_kl.status: ok` when the applicability is `not_applicable` or
 `diagnostic_only`. Aggregation uses the same result-row validator, so invalid

@@ -125,6 +125,37 @@
         "license_review_required": {
           "type": "boolean"
         },
+        "license_review_status": {
+          "type": "string",
+          "enum": ["approved", "pending", "blocked", "not_required"]
+        },
+        "license_reviewed_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_reviewed_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_terms_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_source_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redistribution_or_usage_notes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "license_review_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "token_kl_applicability": {
           "$ref": "#/$defs/token_kl_applicability"
         },
